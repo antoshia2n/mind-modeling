@@ -8,7 +8,7 @@
 export function calcLayout(nodes) {
   if (!nodes || nodes.length === 0) return {};
 
-  const NODE_HEIGHT = 100;  // 葉ノード1つが縦方向に占める高さ（余白込み）
+  const NODE_HEIGHT = 50;   // 葉ノード1つが縦方向に占める高さ（余白込み）
   const X_SPACING   = 220;  // 親→子の水平距離（px）
 
   const byParent = {};
