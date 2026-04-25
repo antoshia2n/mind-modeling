@@ -4,18 +4,12 @@ import {
   useNodesState, useEdgesState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { createNode, updateNode, updateNodePosition, deleteNode } from "../lib/supabase.js";
-import { getPositions } from "../lib/layout.js";
+import { createNode, updateNode, deleteNode } from "../lib/supabase.js";
+import { calcLayout } from "../lib/layout.js"; // 常に自動レイアウト → calcLayout を直接使う
 import MmNode from "./MmNode.jsx";
 
 const nodeTypes = { mmNode: MmNode };
-
-// Whimsical 風：紫の曲線エッジ
-const EDGE_STYLE = {
-  stroke: "#a855f7",
-  strokeWidth: 2.5,
-};
-
+const EDGE_STYLE = { stroke: "#a855f7", strokeWidth: 2.5 };
 const DEBOUNCE_MS = 800;
 
 // ─── ユーティリティ ──────────────────────────────────
@@ -77,6 +71,7 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     }, DEBOUNCE_MS);
   }, [nodes, onNodesChange, onSaved]);
 
+  // 兄弟ノード追加（after: 現在ノードの後、before: 現在ノードの前）
   const addSibling = useCallback(async (nodeId, position = "after") => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node) return;
@@ -85,26 +80,16 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
       .filter(n => n.parent_id === parentId && n.map_id === mapId)
       .sort((a, b) => a.order_index - b.order_index);
     const ci = siblings.findIndex(n => n.id === nodeId);
-
     let newOrder;
     if (position === "after") {
-      if (ci === siblings.length - 1) {
-        newOrder = (siblings[ci]?.order_index ?? 0) + 1024;
-      } else {
-        const prev = siblings[ci].order_index;
-        const next = siblings[ci + 1].order_index;
-        newOrder = prev + Math.max(1, Math.floor((next - prev) / 2));
-      }
+      newOrder = ci === siblings.length - 1
+        ? (siblings[ci]?.order_index ?? 0) + 1024
+        : siblings[ci].order_index + Math.max(1, Math.floor((siblings[ci + 1].order_index - siblings[ci].order_index) / 2));
     } else {
-      if (ci === 0) {
-        newOrder = Math.max(1, siblings[0].order_index - 512);
-      } else {
-        const prev = siblings[ci - 1].order_index;
-        const curr = siblings[ci].order_index;
-        newOrder = prev + Math.max(1, Math.floor((curr - prev) / 2));
-      }
+      newOrder = ci === 0
+        ? Math.max(1, siblings[0].order_index - 512)
+        : siblings[ci - 1].order_index + Math.max(1, Math.floor((siblings[ci].order_index - siblings[ci - 1].order_index) / 2));
     }
-
     const newNode = await createNode(uid, mapId, parentId, newOrder, "");
     if (!newNode) return;
     onNodesChange([...nodes, newNode]);
@@ -113,6 +98,7 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     setForceEditId(newNode.id);
   }, [nodes, uid, mapId, onNodesChange, onSaved]);
 
+  // 子ノード追加
   const addChild = useCallback(async (nodeId) => {
     const children = nodes.filter(n => n.parent_id === nodeId);
     const newOrder  = children.length > 0
@@ -126,6 +112,7 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     setForceEditId(newNode.id);
   }, [nodes, uid, mapId, onNodesChange, onSaved]);
 
+  // ノード削除（確認なし）
   const removeNode = useCallback(async (nodeId) => {
     if (nodes.length <= 1) return;
     await deleteNode(nodeId);
@@ -135,6 +122,7 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     setSelectedId(null);
   }, [nodes, onNodesChange, onSaved]);
 
+  // 折りたたみトグル
   const toggleCollapse = useCallback(async (nodeId) => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node) return;
@@ -144,6 +132,7 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     onSaved();
   }, [nodes, onNodesChange, onSaved]);
 
+  // 矢印キーでの隣接ノード移動
   const moveSelection = useCallback((nodeId, direction) => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node) return;
@@ -165,35 +154,21 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     }
   }, [nodes]);
 
-  // ─── Whimsical 風キーボードショートカット ──────────
+  // ─── キーボードショートカット ───────────────────────
 
   useEffect(() => {
     function handleKeyDown(e) {
       if (document.activeElement?.tagName === "INPUT") return;
       if (!selectedId) return;
-
       const isMac = navigator.platform.toUpperCase().includes("MAC");
       const mod   = isMac ? e.metaKey : e.ctrlKey;
-
-      if (e.key === "Enter" && !mod && !e.shiftKey) {
-        e.preventDefault(); addSibling(selectedId, "after"); return;
-      }
-      if (e.key === "Enter" && mod && !e.shiftKey) {
-        e.preventDefault(); addSibling(selectedId, "before"); return;
-      }
-      if (e.key === "Tab" && !e.shiftKey) {
-        e.preventDefault(); addChild(selectedId); return;
-      }
-      if (e.key === "/" && mod) {
-        e.preventDefault(); toggleCollapse(selectedId); return;
-      }
-      if ((e.key === "Delete" || e.key === "Backspace") && !mod) {
-        e.preventDefault(); removeNode(selectedId); return;
-      }
-      if (e.key === "F2") {
-        e.preventDefault(); setForceEditId(selectedId); return;
-      }
-      if (e.key === "Escape") { setSelectedId(null); return; }
+      if (e.key === "Enter" && !mod && !e.shiftKey) { e.preventDefault(); addSibling(selectedId, "after");  return; }
+      if (e.key === "Enter" && mod  && !e.shiftKey) { e.preventDefault(); addSibling(selectedId, "before"); return; }
+      if (e.key === "Tab"   && !e.shiftKey)         { e.preventDefault(); addChild(selectedId);             return; }
+      if (e.key === "/" && mod)                      { e.preventDefault(); toggleCollapse(selectedId);       return; }
+      if ((e.key === "Delete" || e.key === "Backspace") && !mod) { e.preventDefault(); removeNode(selectedId); return; }
+      if (e.key === "F2")         { e.preventDefault(); setForceEditId(selectedId); return; }
+      if (e.key === "Escape")     { setSelectedId(null); return; }
       if (e.key === "ArrowUp")    { e.preventDefault(); moveSelection(selectedId, "up");    return; }
       if (e.key === "ArrowDown")  { e.preventDefault(); moveSelection(selectedId, "down");  return; }
       if (e.key === "ArrowLeft")  { e.preventDefault(); moveSelection(selectedId, "left");  return; }
@@ -203,38 +178,36 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedId, addSibling, addChild, toggleCollapse, removeNode, moveSelection]);
 
-  // ─── react-flow との同期 ────────────────────────────
+  // ─── react-flow との同期（常に calcLayout で自動整列） ──
 
   useEffect(() => {
-    const positions = getPositions(nodes);
+    // 常に calcLayout で位置を計算（getPositions/x,y 保存値は使わない）
+    const positions = calcLayout(nodes);
     const hiddenIds  = getHiddenIds(nodes);
+    const rootIds    = new Set(nodes.filter(n => !n.parent_id).map(n => n.id));
 
-    setRfNodes(prev =>
-      nodes.map(n => {
-        const existing = prev.find(p => p.id === n.id);
-        const position =
-          (n.x != null && n.y != null) ? { x: n.x, y: n.y } :
-          existing?.position            ? existing.position  :
-          positions[n.id]              ?? { x: 0, y: 0 };
-
-        return {
-          id:       n.id,
-          position,
-          type:     "mmNode",
-          hidden:   hiddenIds.has(n.id),
-          selected: n.id === selectedId,
-          data: {
-            label:            n.content ?? "",
-            collapsed:        n.collapsed,
-            hasChildren:      nodes.some(c => c.parent_id === n.id),
-            forceEdit:        n.id === forceEditId,
-            onContentChange:  (v) => handleContentChange(n.id, v),
-            onToggleCollapse: ()  => toggleCollapse(n.id),
-            onEditStart: () => { setEditingId(n.id); setForceEditId(null); },
-            onEditEnd:   () => setEditingId(null),
-          },
-        };
-      })
+    setRfNodes(
+      nodes.map(n => ({
+        id:       n.id,
+        position: positions[n.id] ?? { x: 0, y: 0 }, // 常に自動計算値
+        type:     "mmNode",
+        hidden:   hiddenIds.has(n.id),
+        selected: n.id === selectedId,
+        data: {
+          label:            n.content ?? "",
+          collapsed:        n.collapsed,
+          hasChildren:      nodes.some(c => c.parent_id === n.id),
+          isRoot:           rootIds.has(n.id),
+          forceEdit:        n.id === forceEditId,
+          onContentChange:  (v) => handleContentChange(n.id, v),
+          onToggleCollapse: ()  => toggleCollapse(n.id),
+          onAddChild:         () => addChild(n.id),
+          onAddSiblingAbove:  () => addSibling(n.id, "before"),
+          onAddSiblingBelow:  () => addSibling(n.id, "after"),
+          onEditStart: () => { setEditingId(n.id); setForceEditId(null); },
+          onEditEnd:   () => setEditingId(null),
+        },
+      }))
     );
 
     setRfEdges(
@@ -249,17 +222,24 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
           hidden: hiddenIds.has(n.id),
         }))
     );
-  }, [nodes, selectedId, forceEditId, handleContentChange, toggleCollapse]);
+  }, [nodes, selectedId, forceEditId, handleContentChange, toggleCollapse, addChild, addSibling]);
 
-  // ─── ドラッグ終了処理 ──────────────────────────────
+  // ─── ドラッグ終了（親子変更 or 自動整列に戻す） ────────
 
   const handleNodeDragStop = useCallback(async (event, node, allRfNodes) => {
     const target = findDropTarget(node, allRfNodes);
+
     if (target) {
+      // 別ノードの上にドロップ → 親子変更
       const descendants = getDescendantIds(node.id, nodes);
-      if (descendants.includes(target.id) || target.id === node.id) return;
+      if (descendants.includes(target.id) || target.id === node.id) {
+        // 循環参照 → 自動整列に戻す
+        const positions = calcLayout(nodes);
+        setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position })));
+        return;
+      }
       const newSiblings = nodes.filter(n => n.parent_id === target.id);
-      const newOrder    = newSiblings.length > 0
+      const newOrder = newSiblings.length > 0
         ? Math.max(...newSiblings.map(n => n.order_index)) + 1024
         : 1024;
       await updateNode(node.id, { parent_id: target.id, order_index: newOrder, x: null, y: null });
@@ -270,15 +250,16 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
       ));
       onSaved();
     } else {
-      const { x, y } = node.position;
-      await updateNodePosition(node.id, x, y);
-      onNodesChange(nodes.map(n => n.id === node.id ? { ...n, x, y } : n));
-      onSaved();
+      // 空白にドロップ → 自動整列に戻す（位置は保存しない）
+      const positions = calcLayout(nodes);
+      setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position })));
     }
-  }, [nodes, onNodesChange, onSaved]);
+  }, [nodes, onNodesChange, onSaved, setRfNodes]);
 
-  const handleNodeClick  = useCallback((e, node) => { setSelectedId(node.id); setForceEditId(null); }, []);
-  const handlePaneClick  = useCallback(() => { if (!editingId) { setSelectedId(null); setForceEditId(null); } }, [editingId]);
+  const handleNodeClick = useCallback((e, node) => { setSelectedId(node.id); setForceEditId(null); }, []);
+  const handlePaneClick = useCallback(() => {
+    if (!editingId) { setSelectedId(null); setForceEditId(null); }
+  }, [editingId]);
 
   // ─── レンダリング ──────────────────────────────────
 
@@ -302,26 +283,18 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
         fitViewOptions={{ padding: 0.35 }}
         minZoom={0.2}
         maxZoom={2}
+        style={{ background: "#eef0f6" }}
       >
-        {/* Whimsical 風：薄いドット格子背景 */}
-        <Background
-          variant={BackgroundVariant.Dots}
-          color="#d1d5db"
-          gap={24}
-          size={1.5}
-        />
+        <Background variant={BackgroundVariant.Dots} color="#c7cade" gap={22} size={1.5} />
         <Controls showInteractive={false} />
       </ReactFlow>
 
       {/* キーボードショートカット凡例 */}
       <div style={{
         position: "absolute", bottom: 16, right: 16,
-        background: "rgba(255,255,255,0.92)",
-        border: "1px solid #e2e8f0",
+        background: "rgba(255,255,255,0.92)", border: "1px solid #e2e8f0",
         borderRadius: 8, padding: "8px 12px",
-        fontSize: 11, color: "#94a3b8",
-        lineHeight: 1.9, pointerEvents: "none",
-        backdropFilter: "blur(4px)",
+        fontSize: 11, color: "#94a3b8", lineHeight: 1.9, pointerEvents: "none",
       }}>
         <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟追加 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加</div>
         <div><b style={{color:"#6b7280"}}>⌘+Enter</b> 上に兄弟 ・ <b style={{color:"#6b7280"}}>⌘+/</b> 折りたたみ</div>
