@@ -1,30 +1,29 @@
-import { useState } from "react";
-import { useAuthUid, T } from "shia2n-core";
-import { APP_NAME, TABS } from "./constants.js";
+import { useState, useEffect } from "react";
 import Home from "./screens/Home.jsx";
+import Edit from "./screens/Edit.jsx";
+
+function parsePath() {
+  const p = window.location.pathname;
+  if (p.startsWith("/m/")) {
+    const mapId = p.slice(3).replace(/\/$/, "");
+    if (mapId) return { screen: "edit", mapId };
+  }
+  return { screen: "home" };
+}
 
 export default function App() {
-  const uid = useAuthUid();
-  const [tab, setTab] = useState("ホーム");
+  const [route, setRoute] = useState(parsePath);
 
-  return (
-    <div style={{ background: T.bg, minHeight: "100vh", fontFamily: "'Noto Sans JP','Hiragino Sans',sans-serif", fontSize: 13, color: T.text }}>
-      {/* Header */}
-      <div style={{ background: T.surface, borderBottom: `1px solid ${T.border}`, padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>{APP_NAME}</div>
-        <nav style={{ display: "flex", gap: 3 }}>
-          {TABS.map(t => (
-            <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? T.text : "transparent", color: tab === t ? "#fff" : T.muted, border: "none", borderRadius: 6, padding: "5px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-              {t}
-            </button>
-          ))}
-        </nav>
-      </div>
+  useEffect(() => {
+    function handleRoute() { setRoute(parsePath()); }
+    window.addEventListener("navigate", handleRoute);
+    window.addEventListener("popstate", handleRoute);
+    return () => {
+      window.removeEventListener("navigate", handleRoute);
+      window.removeEventListener("popstate", handleRoute);
+    };
+  }, []);
 
-      <div style={{ padding: "14px 16px", maxWidth: 680, margin: "0 auto" }}>
-        {tab === "ホーム" && <Home uid={uid} />}
-        {tab === "設定"  && <div style={{ color: T.muted, padding: 24, textAlign: "center" }}>設定画面（未実装）</div>}
-      </div>
-    </div>
-  );
+  if (route.screen === "edit") return <Edit mapId={route.mapId} />;
+  return <Home />;
 }
