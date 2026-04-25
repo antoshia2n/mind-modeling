@@ -1,7 +1,5 @@
 /**
  * Mind-Modeling 専用 Supabase CRUD
- * shia2n-core の汎用 CRUD（fetchAll/insertOne 等）では
- * map_id フィルタや parent_id のツリー操作が難しいため独自実装する。
  */
 import { supabase } from "shia2n-core";
 
@@ -9,7 +7,6 @@ import { supabase } from "shia2n-core";
 // mm_maps
 // ─────────────────────────────────────────────
 
-/** ユーザーのマップ一覧（更新日時の新しい順） */
 export async function getMaps(uid) {
   const { data, error } = await supabase
     .from("mm_maps")
@@ -21,7 +18,6 @@ export async function getMaps(uid) {
   return data || [];
 }
 
-/** マップを新規作成して返す */
 export async function createMap(uid, title = "Untitled") {
   const { data, error } = await supabase
     .from("mm_maps")
@@ -32,7 +28,6 @@ export async function createMap(uid, title = "Untitled") {
   return data;
 }
 
-/** 単一マップを取得 */
 export async function getMap(mapId) {
   const { data, error } = await supabase
     .from("mm_maps")
@@ -43,7 +38,6 @@ export async function getMap(mapId) {
   return data;
 }
 
-/** マップを更新（updated_at を自動更新） */
 export async function updateMap(mapId, updates) {
   const { error } = await supabase
     .from("mm_maps")
@@ -52,7 +46,6 @@ export async function updateMap(mapId, updates) {
   if (error) console.error("[mm] updateMap:", error);
 }
 
-/** マップを削除（mm_nodes は ON DELETE CASCADE で自動削除） */
 export async function deleteMap(mapId) {
   const { error } = await supabase
     .from("mm_maps")
@@ -65,7 +58,6 @@ export async function deleteMap(mapId) {
 // mm_nodes
 // ─────────────────────────────────────────────
 
-/** マップのノードを全件取得（order_index 昇順） */
 export async function getNodes(mapId) {
   const { data, error } = await supabase
     .from("mm_nodes")
@@ -76,14 +68,13 @@ export async function getNodes(mapId) {
   return data || [];
 }
 
-/** ノードを新規作成して返す */
 export async function createNode(uid, mapId, parentId, orderIndex, content = "") {
   const { data, error } = await supabase
     .from("mm_nodes")
     .insert([{
       user_id: uid,
       map_id: mapId,
-      parent_id: parentId ?? null,   // undefined → null に正規化
+      parent_id: parentId ?? null,
       order_index: orderIndex,
       content,
     }])
@@ -93,7 +84,6 @@ export async function createNode(uid, mapId, parentId, orderIndex, content = "")
   return data;
 }
 
-/** ノードを更新（updated_at を自動更新） */
 export async function updateNode(nodeId, updates) {
   const { error } = await supabase
     .from("mm_nodes")
@@ -102,10 +92,15 @@ export async function updateNode(nodeId, updates) {
   if (error) console.error("[mm] updateNode:", error);
 }
 
-/**
- * ノードを削除
- * ON DELETE CASCADE により子孫ノードも自動削除される
- */
+/** マップ上の位置（x, y）だけを保存する */
+export async function updateNodePosition(nodeId, x, y) {
+  const { error } = await supabase
+    .from("mm_nodes")
+    .update({ x, y, updated_at: new Date().toISOString() })
+    .eq("id", nodeId);
+  if (error) console.error("[mm] updateNodePosition:", error);
+}
+
 export async function deleteNode(nodeId) {
   const { error } = await supabase
     .from("mm_nodes")
@@ -114,11 +109,6 @@ export async function deleteNode(nodeId) {
   if (error) console.error("[mm] deleteNode:", error);
 }
 
-/**
- * 複数ノードの order_index / parent_id を一括更新
- * 並び替え時の再採番で使用
- * @param {Array<{id: string, order_index: number, parent_id: string|null}>} updates
- */
 export async function updateNodesBatch(updates) {
   for (const u of updates) {
     const { error } = await supabase
