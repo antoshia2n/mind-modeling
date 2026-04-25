@@ -1,36 +1,15 @@
 /**
- * mm_nodes から react-flow 用の位置を決定する。
- * n.x / n.y が保存済み（非 null）ならその値を使う。
- * null なら自動レイアウトで計算した値を使う。
+ * mm_nodes のフラット配列から react-flow 用の位置情報（x, y）を計算する。
+ * 左→右のツリーレイアウト（親が左、子が右に展開）。
  *
- * @param {Array} nodes
- * @returns {Object} { [nodeId]: { x, y } }
- */
-export function getPositions(nodes) {
-  const auto = calcLayout(nodes);
-  const result = {};
-  for (const n of nodes) {
-    if (n.x != null && n.y != null) {
-      result[n.id] = { x: n.x, y: n.y };
-    } else {
-      result[n.id] = auto[n.id] ?? { x: 0, y: 0 };
-    }
-  }
-  return result;
-}
-
-/**
- * フラット配列から左→右ツリーレイアウトの位置を計算する。
- * x/y が null のノードのフォールバックとして使用。
- *
- * @param {Array} nodes
+ * @param {Array} nodes - mm_nodes の配列（id, parent_id, order_index を持つ）
  * @returns {Object} { [nodeId]: { x, y } }
  */
 export function calcLayout(nodes) {
   if (!nodes || nodes.length === 0) return {};
 
-  const NODE_HEIGHT = 70;  // 1ノードが占める縦幅（余白込み）
-  const X_SPACING   = 280; // 親→子の水平距離（px）
+  const NODE_HEIGHT = 100;  // 葉ノード1つが縦方向に占める高さ（余白込み）
+  const X_SPACING   = 220;  // 親→子の水平距離（px）
 
   const byParent = {};
   for (const n of nodes) {
@@ -66,4 +45,12 @@ export function calcLayout(nodes) {
   }
 
   return positions;
+}
+
+/**
+ * 保存済み x/y があればそれを使い、なければ calcLayout を使う。
+ * （現在は常に自動整列なので呼ばれないが、互換性のために残す）
+ */
+export function getPositions(nodes) {
+  return calcLayout(nodes);
 }

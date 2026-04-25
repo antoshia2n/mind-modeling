@@ -5,7 +5,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { createNode, updateNode, deleteNode } from "../lib/supabase.js";
-import { calcLayout } from "../lib/layout.js"; // 常に自動レイアウト → calcLayout を直接使う
+import { calcLayout } from "../lib/layout.js";
 import MmNode from "./MmNode.jsx";
 
 const nodeTypes = { mmNode: MmNode };
@@ -50,6 +50,26 @@ function findDropTarget(dragged, allRfNodes) {
   return null;
 }
 
+/**
+ * 選択ノードを起点にサブツリーをDFS順のフラット配列に変換する。
+ * parentIdx: -1 はコピーのルートノード（ペースト先の子として挿入される）
+ */
+function collectSubtree(nodeId, nodes) {
+  const result = [];
+  function dfs(id, parentIdx) {
+    const node = nodes.find(n => n.id === id);
+    if (!node) return;
+    const myIdx = result.length;
+    result.push({ content: node.content ?? "", parentIdx });
+    const children = nodes
+      .filter(n => n.parent_id === id)
+      .sort((a, b) => a.order_index - b.order_index);
+    for (const child of children) dfs(child.id, myIdx);
+  }
+  dfs(nodeId, -1);
+  return result;
+}
+
 // ─── MapMode ────────────────────────────────────────
 
 export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
@@ -59,6 +79,7 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
   const [selectedId,  setSelectedId]  = useState(null);
   const [editingId,   setEditingId]   = useState(null);
   const [forceEditId, setForceEditId] = useState(null);
+  const [toastMsg,    setToastMsg]    = useState(null); // コピー完了トースト
 
   // ─── 操作ハンドラ ──────────────────────────────────
 
@@ -71,7 +92,6 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     }, DEBOUNCE_MS);
   }, [nodes, onNodesChange, onSaved]);
 
-  // 兄弟ノード追加（after: 現在ノードの後、before: 現在ノードの前）
   const addSibling = useCallback(async (nodeId, position = "after") => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node) return;
@@ -98,7 +118,6 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     setForceEditId(newNode.id);
   }, [nodes, uid, mapId, onNodesChange, onSaved]);
 
-  // 子ノード追加
   const addChild = useCallback(async (nodeId) => {
     const children = nodes.filter(n => n.parent_id === nodeId);
     const newOrder  = children.length > 0
@@ -112,7 +131,6 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     setForceEditId(newNode.id);
   }, [nodes, uid, mapId, onNodesChange, onSaved]);
 
-  // ノード削除（確認なし）
   const removeNode = useCallback(async (nodeId) => {
     if (nodes.length <= 1) return;
     await deleteNode(nodeId);
@@ -122,7 +140,6 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     setSelectedId(null);
   }, [nodes, onNodesChange, onSaved]);
 
-  // 折りたたみトグル
   const toggleCollapse = useCallback(async (nodeId) => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node) return;
@@ -132,7 +149,6 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     onSaved();
   }, [nodes, onNodesChange, onSaved]);
 
-  // 矢印キーでの隣接ノード移動
   const moveSelection = useCallback((nodeId, direction) => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node) return;
@@ -154,14 +170,101 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     }
   }, [nodes]);
 
+  // ─── 構造コピー ────────────────────────────────────
+
+  const copySubtree = useCallback(async (nodeId) => {
+    const subtree = collectSubtree(nodeId, nodes);
+    const payload = JSON.stringify({ mmCopy: true, nodes: subtree });
+    try {
+      await navigator.clipboard.writeText(payload);
+      const nodeCount = subtree.length;
+      showToast(`${nodeCount}ノードをコピーしました`);
+    } catch {
+      showToast("クリップボードへのアクセスを許可してください");
+    }
+  }, [nodes]);
+
+  // ─── 構造ペースト ───────────────────────────────────
+
+  const pasteSubtree = useCallback(async (parentId) => {
+    let text;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      showToast("クリップボードの読み取りを許可してください");
+      return;
+    }
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch { return; }
+    if (!payload?.mmCopy || !Array.isArray(payload.nodes)) return;
+
+    // DFS順にノードを作成（parentIdx が先に処理済みであることが保証される）
+    const idMap    = {};  // copiedIndex → 新しい nodeId
+    const newNodes = [];
+    const copied   = payload.nodes;
+
+    for (let i = 0; i < copied.length; i++) {
+      const { content, parentIdx } = copied[i];
+      const actualParentId = parentIdx === -1
+        ? parentId   // コピーのルートは選択ノードの子に
+        : idMap[parentIdx];
+
+      // 実際の現在のノードリストに新規追加分も含めて siblings を計算
+      const currentNodes = [...nodes, ...newNodes];
+      const siblings = currentNodes.filter(n => n.parent_id === actualParentId);
+      const newOrder  = siblings.length > 0
+        ? Math.max(...siblings.map(n => n.order_index)) + 1024
+        : 1024;
+
+      const newNode = await createNode(uid, mapId, actualParentId, newOrder, content);
+      if (!newNode) continue;
+      idMap[i]  = newNode.id;
+      newNodes.push(newNode);
+    }
+
+    onNodesChange([...nodes, ...newNodes]);
+    onSaved();
+    if (newNodes.length > 0) {
+      setSelectedId(newNodes[0].id);
+      showToast(`${newNodes.length}ノードをペーストしました`);
+    }
+  }, [nodes, uid, mapId, onNodesChange, onSaved]);
+
+  // ─── トースト表示 ───────────────────────────────────
+
+  function showToast(msg) {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 2000);
+  }
+
   // ─── キーボードショートカット ───────────────────────
 
   useEffect(() => {
     function handleKeyDown(e) {
       if (document.activeElement?.tagName === "INPUT") return;
-      if (!selectedId) return;
+
       const isMac = navigator.platform.toUpperCase().includes("MAC");
       const mod   = isMac ? e.metaKey : e.ctrlKey;
+
+      // コピー/ペーストは selectedId がなくてもパン（Cmd+C/V）と被る可能性があるため、
+      // selectedId がある時のみ mmCopy として扱う
+      if (selectedId) {
+        if (e.key === "c" && mod) {
+          e.preventDefault();
+          copySubtree(selectedId);
+          return;
+        }
+        if (e.key === "v" && mod) {
+          e.preventDefault();
+          pasteSubtree(selectedId);
+          return;
+        }
+      }
+
+      if (!selectedId) return;
+
       if (e.key === "Enter" && !mod && !e.shiftKey) { e.preventDefault(); addSibling(selectedId, "after");  return; }
       if (e.key === "Enter" && mod  && !e.shiftKey) { e.preventDefault(); addSibling(selectedId, "before"); return; }
       if (e.key === "Tab"   && !e.shiftKey)         { e.preventDefault(); addChild(selectedId);             return; }
@@ -176,12 +279,11 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId, addSibling, addChild, toggleCollapse, removeNode, moveSelection]);
+  }, [selectedId, addSibling, addChild, toggleCollapse, removeNode, moveSelection, copySubtree, pasteSubtree]);
 
-  // ─── react-flow との同期（常に calcLayout で自動整列） ──
+  // ─── react-flow との同期 ────────────────────────────
 
   useEffect(() => {
-    // 常に calcLayout で位置を計算（getPositions/x,y 保存値は使わない）
     const positions = calcLayout(nodes);
     const hiddenIds  = getHiddenIds(nodes);
     const rootIds    = new Set(nodes.filter(n => !n.parent_id).map(n => n.id));
@@ -189,7 +291,7 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     setRfNodes(
       nodes.map(n => ({
         id:       n.id,
-        position: positions[n.id] ?? { x: 0, y: 0 }, // 常に自動計算値
+        position: positions[n.id] ?? { x: 0, y: 0 },
         type:     "mmNode",
         hidden:   hiddenIds.has(n.id),
         selected: n.id === selectedId,
@@ -230,7 +332,6 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
     const target = findDropTarget(node, allRfNodes);
 
     if (target) {
-      // 別ノードの上にドロップ → 親子変更
       const descendants = getDescendantIds(node.id, nodes);
       if (descendants.includes(target.id) || target.id === node.id) {
         // 循環参照 → 自動整列に戻す
@@ -244,13 +345,11 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
         : 1024;
       await updateNode(node.id, { parent_id: target.id, order_index: newOrder, x: null, y: null });
       onNodesChange(nodes.map(n =>
-        n.id === node.id
-          ? { ...n, parent_id: target.id, order_index: newOrder, x: null, y: null }
-          : n
+        n.id === node.id ? { ...n, parent_id: target.id, order_index: newOrder, x: null, y: null } : n
       ));
       onSaved();
     } else {
-      // 空白にドロップ → 自動整列に戻す（位置は保存しない）
+      // 空白にドロップ → 自動整列に戻す
       const positions = calcLayout(nodes);
       setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position })));
     }
@@ -264,7 +363,7 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
   // ─── レンダリング ──────────────────────────────────
 
   return (
-    <div style={{ width: "100%", height: "calc(100vh - 53px)" }}>
+    <div style={{ width: "100%", height: "calc(100vh - 53px)", position: "relative" }}>
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
@@ -279,6 +378,9 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
         elementsSelectable={true}
         deleteKeyCode={null}
         selectionKeyCode={null}
+        // スクロールでパン（ドラッグではなく）
+        panOnScroll={true}
+        panOnDrag={false}
         fitView
         fitViewOptions={{ padding: 0.35 }}
         minZoom={0.2}
@@ -289,6 +391,19 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
         <Controls showInteractive={false} />
       </ReactFlow>
 
+      {/* コピー/ペースト完了トースト */}
+      {toastMsg && (
+        <div style={{
+          position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(30,30,40,0.85)", color: "#fff",
+          borderRadius: 8, padding: "8px 18px", fontSize: 13,
+          pointerEvents: "none", whiteSpace: "nowrap",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+        }}>
+          {toastMsg}
+        </div>
+      )}
+
       {/* キーボードショートカット凡例 */}
       <div style={{
         position: "absolute", bottom: 16, right: 16,
@@ -298,8 +413,9 @@ export default function MapMode({ uid, mapId, nodes, onNodesChange, onSaved }) {
       }}>
         <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟追加 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加</div>
         <div><b style={{color:"#6b7280"}}>⌘+Enter</b> 上に兄弟 ・ <b style={{color:"#6b7280"}}>⌘+/</b> 折りたたみ</div>
+        <div><b style={{color:"#6b7280"}}>⌘+C</b> サブツリーコピー ・ <b style={{color:"#6b7280"}}>⌘+V</b> ペースト</div>
         <div><b style={{color:"#6b7280"}}>↑↓←→</b> 移動 ・ <b style={{color:"#6b7280"}}>Del</b> 削除</div>
-        <div>ダブルクリックで編集</div>
+        <div>スクロールでパン ・ ダブルクリックで編集</div>
       </div>
     </div>
   );
