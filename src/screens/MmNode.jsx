@@ -15,7 +15,19 @@ export default function MmNode({ data, selected }) {
   useEffect(() => {
     if (data.forceEdit && !editing) { setEditing(true); data.onEditStart?.(); }
   }, [data.forceEdit]);
-  useEffect(() => { if (editing) { inputRef.current?.focus(); inputRef.current?.select(); } }, [editing]);
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+      autoResizeTA(inputRef.current);
+    }
+  }, [editing]);
+
+  function autoResizeTA(el) {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }
 
   function startEdit() { if (!editing) { setEditing(true); data.onEditStart?.(); } }
   function commitEdit() {
@@ -48,7 +60,7 @@ export default function MmNode({ data, selected }) {
         onMouseLeave={() => setHovered(false)}
         style={{
           background: bg, border: `1.5px solid ${selected ? PURPLE : "#e2e8f0"}`,
-          borderRadius: 10, padding: "10px 18px", minWidth: 80, maxWidth: 320,
+          borderRadius: 10, padding: "10px 18px", minWidth: 80, maxWidth: editing ? 480 : 320,
           boxShadow: "0 1px 4px rgba(0,0,0,0.08)", cursor: "default",
           userSelect: "none", position: "relative",
         }}
@@ -61,10 +73,13 @@ export default function MmNode({ data, selected }) {
         {selected && !editing && <FormatToolbar data={data} />}
 
         {editing ? (
-          <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={commitEdit} onKeyDown={handleKeyDown}
+          <textarea ref={inputRef} value={draft}
+            onChange={e => { autoResizeTA(e.target); setDraft(e.target.value); }}
+            onBlur={commitEdit} onKeyDown={handleKeyDown} rows={1}
             style={{ fontSize: 16, fontWeight: data.bold ? 700 : 600, fontStyle: data.italic ? "italic" : "normal",
               textDecoration: data.strikethrough ? "line-through" : "none", color: data.textColor || "#374151",
-              fontFamily: "inherit", background: "none", border: "none", outline: "none", padding: 0, width: "100%" }} />
+              fontFamily: "inherit", background: "none", border: "none", outline: "none", padding: 0,
+              width: "100%", resize: "none", overflow: "hidden", display: "block" }} />
         ) : (
           <span style={{ fontSize: 16, lineHeight: 1.5, display: "block", ...textStyle, fontWeight: data.bold ? 700 : 600, color: data.textColor || "#374151" }}>
             {data.label || <span style={{ color: "#9ca3af", fontWeight: 400 }}>新しいノード</span>}
@@ -93,7 +108,7 @@ export default function MmNode({ data, selected }) {
         padding: hasBg ? "4px 8px" : "2px 4px", borderRadius: 6,
         background: hasBg ? bg : (selected ? "rgba(168,85,247,0.07)" : "transparent"),
         border: `1.5px solid ${selected ? "rgba(168,85,247,0.4)" : (hasBg ? "transparent" : "transparent")}`,
-        cursor: "default", userSelect: "none", maxWidth: 240,
+        cursor: "default", userSelect: "none", maxWidth: editing ? 400 : 240,
       }}
     >
       <Handle type="target" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
@@ -117,11 +132,13 @@ export default function MmNode({ data, selected }) {
       )}
 
       {editing ? (
-        <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={commitEdit} onKeyDown={handleKeyDown}
-          size={Math.max(4, draft.length + 1)}
+        <textarea ref={inputRef} value={draft}
+          onChange={e => { autoResizeTA(e.target); setDraft(e.target.value); }}
+          onBlur={commitEdit} onKeyDown={handleKeyDown} rows={1}
           style={{ fontSize: 14, ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"),
             fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif",
-            background: "none", border: "none", outline: "none", padding: 0, minWidth: 40 }} />
+            background: "none", border: "none", outline: "none", padding: 0, minWidth: 60,
+            resize: "none", overflow: "hidden" }} />
       ) : (
         <span style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: "nowrap", ...textStyle,
           fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"),
