@@ -1,25 +1,11 @@
 /**
  * POST /api/internal/import-text-to-map
- * インデント付きテキストをパースして mm_maps + mm_nodes + mm_import_log に保存する内部 API
  *
- * Headers:
- *   Authorization: Bearer {MM_INTERNAL_SECRET}
- *   Content-Type: application/json
- *
- * Body:
- *   {
- *     title: string,           // 必須
- *     indented_text: string,   // 必須
- *     user_id: string,         // 必須
- *     source_note?: string     // 任意（「Whimsical の○○フォルダから」など）
- *   }
- *
- * Response:
- *   { map_id, node_count, source_note }
+ * 修正履歴：
+ * v1: ノードを1件ずつ INSERT → 30秒タイムアウト
+ * v2: UUID 事前生成 + 1回 bulk INSERT → 自己参照FK制約エラーの可能性
+ * v3: 深さ(depth)単位でバッチ INSERT → 親が必ず先に挿入されFK制約を確実に回避
  */
-
-// インデント検出とパースをサーバーサイドでも実装
-// （フロントの textImport.js と同じロジックを Workers 内にインライン）
 
 const BULLET_RE = /^[-*・+]\s+/;
 
@@ -39,31 +25,24 @@ function detectIndentUnit(lines) {
 
 function parseIndentedText(rawText) {
   if (!rawText || !rawText.trim()) return { items: [], errors: [] };
-
   const normalized = rawText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rawLines   = normalized.split("\n").filter(l => l.trim() !== "");
   if (rawLines.length === 0) return { items: [], errors: [] };
 
   const indentUnit = detectIndentUnit(rawLines);
-  const errors = [];
-  const items  = [];
-  const depthStack = [-1];
+  const errors = [], items = [], depthStack = [-1];
 
   for (let i = 0; i < rawLines.length; i++) {
-    const line = rawLines[i];
-    let raw = line;
-    let depth = 0;
-
+    let raw = rawLines[i], depth = 0;
     if (indentUnit === "\t") {
       const m = raw.match(/^(\t*)/);
       depth = m ? m[1].length : 0;
       raw = raw.slice(depth);
     } else {
-      const unitLen = indentUnit.length;
-      while (raw.startsWith(indentUnit)) { raw = raw.slice(unitLen); depth++; }
+      const ul = indentUnit.length;
+      while (raw.startsWith(indentUnit)) { raw = raw.slice(ul); depth++; }
       raw = raw.trimStart();
     }
-
     raw = raw.replace(BULLET_RE, "").trim();
     if (!raw) continue;
 
@@ -72,66 +51,47 @@ function parseIndentedText(rawText) {
       errors.push(`${i + 1}行目: インデントが深すぎます。自動補正します。`);
       depth = prevDepth + 1;
     }
-
     while (depthStack.length - 1 > depth) depthStack.pop();
 
     const correctedParent = depth === 0 ? -1 : (depthStack[depth - 1] ?? -1);
     const myIndex = items.length;
     items.push({ text: raw, depth, parentIndex: correctedParent });
-
-    if (depthStack.length - 1 < depth) {
-      depthStack.push(myIndex);
-    } else {
-      depthStack[depth] = myIndex;
-    }
+    if (depthStack.length - 1 < depth) depthStack.push(myIndex);
+    else depthStack[depth] = myIndex;
   }
-
   return { items, errors };
 }
 
 export async function onRequestPost(context) {
   const { request, env } = context;
 
-  // 認証
   const auth = request.headers.get("Authorization") ?? "";
-  if (auth !== `Bearer ${env.MM_INTERNAL_SECRET}`) {
-    return json({ error: "Unauthorized" }, 401);
-  }
+  if (auth !== `Bearer ${env.MM_INTERNAL_SECRET}`) return json({ error: "Unauthorized" }, 401);
 
   let body;
-  try { body = await request.json(); } catch {
-    return json({ error: "Invalid JSON" }, 400);
-  }
+  try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
 
   const { title, indented_text, user_id, source_note } = body;
-  if (!title || !indented_text || !user_id) {
-    return json({ error: "title, indented_text, user_id are required" }, 400);
-  }
+  if (!title || !indented_text || !user_id) return json({ error: "title, indented_text, user_id are required" }, 400);
 
-  // 巨大ペースト上限チェック（10000ノード超）
   const lineCount = indented_text.split("\n").filter(l => l.trim()).length;
-  if (lineCount > 10000) {
-    return json({ error: "too_large", message: "10000ノードを超えるインポートはできません。" }, 400);
-  }
+  if (lineCount > 10000) return json({ error: "too_large", message: "10000ノードを超えるインポートはできません。" }, 400);
 
   const { items, errors } = parseIndentedText(indented_text);
-  if (items.length === 0) {
-    return json({ error: "empty", message: "有効なノードが見つかりませんでした。" }, 400);
-  }
+  if (items.length === 0) return json({ error: "empty", message: "有効なノードが見つかりませんでした。" }, 400);
 
   const supaUrl = env.VITE_SUPABASE_URL;
   const supaKey = env.VITE_SUPABASE_ANON_KEY;
-  const headers = {
+  const h = {
     "Content-Type":  "application/json",
     "apikey":        supaKey,
     "Authorization": `Bearer ${supaKey}`,
     "Prefer":        "return=representation",
   };
 
-  // 1. mm_maps に INSERT
+  // 1. mm_maps INSERT
   const mapRes = await fetch(`${supaUrl}/rest/v1/mm_maps`, {
-    method: "POST",
-    headers,
+    method: "POST", headers: h,
     body: JSON.stringify({ user_id, title }),
   });
   if (!mapRes.ok) {
@@ -141,60 +101,59 @@ export async function onRequestPost(context) {
   const [mapRow] = await mapRes.json();
   const map_id = mapRow.id;
 
-  // 2. mm_nodes に順番に INSERT（parent_id を indexMap で解決）
-  const indexMap = {};  // items のインデックス → 実際の node_id
-  const ORDER_UNIT = 1024;
+  // 2. 深さ単位でバッチ INSERT（親が必ず先に挿入される）
+  // indexMap: items のインデックス → 実際の node_id（Supabase が採番）
+  const indexMap = {};
+  const maxDepth = Math.max(...items.map(it => it.depth));
 
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const parent_id = item.parentIndex === -1 ? null : (indexMap[item.parentIndex] ?? null);
+  for (let depth = 0; depth <= maxDepth; depth++) {
+    const batch = items
+      .map((item, i) => ({ item, i }))
+      .filter(({ item }) => item.depth === depth);
 
-    // 兄弟内での order_index を計算（同じ parentIndex の何番目か）
-    const siblingsBefore = items.slice(0, i).filter(x => x.parentIndex === item.parentIndex);
-    const order_index = (siblingsBefore.length + 1) * ORDER_UNIT;
+    if (batch.length === 0) continue;
 
-    const nodeRes = await fetch(`${supaUrl}/rest/v1/mm_nodes`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
+    const nodeRows = batch.map(({ item, i }) => {
+      const parent_id = item.parentIndex === -1 ? null : (indexMap[item.parentIndex] ?? null);
+      // 兄弟内での order_index
+      const sibsBefore = items.slice(0, i).filter(x => x.parentIndex === item.parentIndex && x.depth === item.depth);
+      return {
         user_id,
         map_id,
         parent_id,
-        content: item.text,
-        order_index,
-      }),
+        content:     item.text,
+        order_index: (sibsBefore.length + 1) * 1024,
+      };
     });
-    if (!nodeRes.ok) {
-      // ノード挿入失敗時はマップごと削除してロールバック
+
+    const res = await fetch(`${supaUrl}/rest/v1/mm_nodes`, {
+      method: "POST", headers: h,
+      body: JSON.stringify(nodeRows),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      // ロールバック：マップごと削除（mm_nodes は CASCADE で消える）
       await fetch(`${supaUrl}/rest/v1/mm_maps?id=eq.${map_id}`, {
-        method: "DELETE",
-        headers,
-      });
-      return json({ error: "node_insert_failed", node_index: i }, 500);
+        method: "DELETE", headers: h,
+      }).catch(() => {});
+      return json({ error: "node_insert_failed", depth, detail: err }, 500);
     }
-    const [nodeRow] = await nodeRes.json();
-    indexMap[i] = nodeRow.id;
+
+    // 返ってきた ID を indexMap に記録
+    const inserted = await res.json();
+    batch.forEach(({ i }, idx) => {
+      indexMap[i] = inserted[idx]?.id;
+    });
   }
 
-  // 3. mm_import_log に INSERT
+  // 3. mm_import_log INSERT（ベストエフォート）
   await fetch(`${supaUrl}/rest/v1/mm_import_log`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      user_id,
-      map_id,
-      source:      "whimsical_paste",
-      source_note: source_note ?? null,
-      node_count:  items.length,
-    }),
-  }).catch(() => {}); // 失敗してもメインの結果は返す
+    method: "POST", headers: h,
+    body: JSON.stringify({ user_id, map_id, source: "whimsical_paste", source_note: source_note ?? null, node_count: items.length }),
+  }).catch(() => {});
 
-  return json({
-    map_id,
-    node_count:   items.length,
-    source_note:  source_note ?? null,
-    parse_errors: errors,
-  }, 200);
+  return json({ map_id, node_count: items.length, source_note: source_note ?? null, parse_errors: errors }, 200);
 }
 
 export async function onRequestOptions() {
@@ -207,7 +166,7 @@ function json(body, status = 200) {
 
 function corsHeaders() {
   return {
-    "Content-Type":                 "application/json",
+    "Content-Type": "application/json",
     "Access-Control-Allow-Origin":  "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",

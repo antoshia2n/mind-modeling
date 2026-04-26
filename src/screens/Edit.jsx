@@ -11,11 +11,16 @@ const PURPLE = "#a855f7";
 
 export default function Edit({ mapId }) {
   const uid = useAuthUid();
-  const [map,       setMap]       = useState(null);
-  const [nodes,     setNodes]     = useState([]);
-  const [saveState, setSaveState] = useState("saved");
-  const [loading,   setLoading]   = useState(true);
-  const [mode,      setMode]      = useState("map"); // デフォルトをマップ画面に変更
+  const [map,        setMap]        = useState(null);
+  const [nodes,      setNodes]      = useState([]);
+  const [saveState,  setSaveState]  = useState("saved");
+  const [loading,    setLoading]    = useState(true);
+  const [mode,       setMode]       = useState("map");
+  // レイアウトモード: "bi"（双方向・デフォルト）/ "lr"（左→右）
+  // localStorage でマップごとに保存
+  const [layoutMode, setLayoutMode] = useState(() => {
+    return localStorage.getItem(`mm_layout_${mapId}`) ?? "bi";
+  });
 
   useEffect(() => {
     if (!uid || !mapId) return;
@@ -40,6 +45,12 @@ export default function Edit({ mapId }) {
   function handleNodesChange(newNodes) { setNodes(newNodes); setSaveState("saving"); }
   function handleSaved() { setSaveState("saved"); }
 
+  function toggleLayoutMode() {
+    const next = layoutMode === "bi" ? "lr" : "bi";
+    setLayoutMode(next);
+    localStorage.setItem(`mm_layout_${mapId}`, next);
+  }
+
   const s = {
     wrap: {
       minHeight: "100vh", background: T.bg, color: T.fg,
@@ -47,8 +58,8 @@ export default function Edit({ mapId }) {
       display: "flex", flexDirection: "column",
     },
     header: {
-      padding: "12px 24px", borderBottom: `1px solid ${BORDER}`,
-      display: "flex", alignItems: "center", gap: 14,
+      padding: "12px 20px", borderBottom: `1px solid ${BORDER}`,
+      display: "flex", alignItems: "center", gap: 10,
       flexShrink: 0, height: 53, boxSizing: "border-box",
     },
     backBtn: { background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14, padding: 0, whiteSpace: "nowrap" },
@@ -56,12 +67,21 @@ export default function Edit({ mapId }) {
     modeToggle: { display: "flex", border: `1px solid ${BORDER}`, borderRadius: 8, overflow: "hidden", flexShrink: 0 },
     modeBtn: (active) => ({
       background: active ? ACCENT : "none", color: active ? "#fff" : T.muted,
-      border: "none", padding: "6px 14px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
+      border: "none", padding: "6px 12px", fontSize: 13, fontWeight: 500,
+      cursor: "pointer", fontFamily: "inherit",
     }),
     shareBtn: {
       background: "none", border: `1px solid ${PURPLE}`,
-      borderRadius: 8, padding: "6px 14px", fontSize: 13, fontWeight: 500,
+      borderRadius: 8, padding: "6px 12px", fontSize: 13, fontWeight: 500,
       color: PURPLE, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap",
+    },
+    // レイアウトモードボタン（マップ表示時のみ意味を持つ）
+    layoutBtn: {
+      background: "none", border: `1px solid ${BORDER}`,
+      borderRadius: 8, padding: "6px 10px", fontSize: 12,
+      color: T.muted, cursor: "pointer", flexShrink: 0,
+      whiteSpace: "nowrap", display: mode === "map" ? "block" : "none",
+      title: layoutMode === "bi" ? "左→右に切替" : "中央展開に切替",
     },
     saveLabel: { fontSize: 12, color: T.muted, flexShrink: 0, whiteSpace: "nowrap" },
     body: { flex: 1, overflow: mode === "map" ? "hidden" : "auto" },
@@ -83,17 +103,31 @@ export default function Edit({ mapId }) {
           placeholder="タイトル"
         />
         <button style={s.shareBtn} onClick={() => navigate(`/m/${mapId}/share`)}>共有</button>
+
+        {/* リスト ⇔ マップ 切替 */}
         <div style={s.modeToggle}>
           <button style={s.modeBtn(mode === "list")} onClick={() => setMode("list")}>リスト</button>
           <button style={s.modeBtn(mode === "map")}  onClick={() => setMode("map")}>マップ</button>
         </div>
+
+        {/* レイアウトモード切替（マップ時のみ有効） */}
+        {mode === "map" && (
+          <button
+            style={s.layoutBtn}
+            onClick={toggleLayoutMode}
+            title={layoutMode === "bi" ? "左→右レイアウトに切替" : "中央展開レイアウトに切替"}
+          >
+            {layoutMode === "bi" ? "⇔ 中央" : "→ LR"}
+          </button>
+        )}
+
         <div style={s.saveLabel}>{saveState === "saving" ? "保存中..." : "保存済"}</div>
       </div>
       <div style={s.body}>
         {mode === "list" ? (
           <ListMode uid={uid} mapId={mapId} nodes={nodes} onNodesChange={handleNodesChange} onSaved={handleSaved} />
         ) : (
-          <MapMode  uid={uid} mapId={mapId} nodes={nodes} onNodesChange={handleNodesChange} onSaved={handleSaved} />
+          <MapMode  uid={uid} mapId={mapId} nodes={nodes} layoutMode={layoutMode} onNodesChange={handleNodesChange} onSaved={handleSaved} />
         )}
       </div>
     </div>
