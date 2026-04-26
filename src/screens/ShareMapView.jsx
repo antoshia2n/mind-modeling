@@ -1,5 +1,8 @@
-import { useState, useMemo, useCallback } from "react";
-import { ReactFlow, Background, Controls, BackgroundVariant } from "@xyflow/react";
+import { useState, useEffect, useCallback } from "react";
+import {
+  ReactFlow, Background, Controls, BackgroundVariant,
+  useNodesState, useEdgesState,
+} from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { T } from "shia2n-core";
 import { Handle, Position } from "@xyflow/react";
@@ -9,9 +12,8 @@ const PURPLE     = "#a855f7";
 const EDGE_STYLE = { stroke: PURPLE, strokeWidth: 2.5 };
 
 // ─── 読み取り専用ノード ──────────────────────────────────
-// ⚠️ 内部 useState(collapsed) を持たない。
-// 親（ShareMapView）が localCollapsed で一元管理し、
-// data.collapsed として最新値を渡す設計。
+// data.collapsed は親（ShareMapView）が一元管理する。
+// 内部 useState を持たないことで、親からの更新が即座に反映される。
 
 function ShareNode({ data }) {
   const textStyle = {
@@ -56,10 +58,10 @@ function ShareNode({ data }) {
           ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 9, height: 9, right: -4.5, opacity: 1, pointerEvents: "none" }
           : { opacity: 0, pointerEvents: "none" }} />
 
-      {/* 折りたたみボタン：data.collapsed（親管理）を直接参照 */}
+      {/* 折りたたみボタン：data.onToggle を呼ぶだけ。内部 state なし。 */}
       {data.hasChildren && (
         <button
-          onClick={(e) => { e.stopPropagation(); data.onToggle?.(); }}
+          onClick={e => { e.stopPropagation(); data.onToggle?.(); }}
           style={{
             position: "absolute", right: -26, top: "50%", transform: "translateY(-50%)",
             background: "white", border: `1.5px solid ${PURPLE}`, borderRadius: "50%",
@@ -89,18 +91,24 @@ const nodeTypes = { shareNode: ShareNode };
 // ─── ShareMapView ────────────────────────────────────────
 
 export default function ShareMapView({ nodes }) {
-  // 折りたたみ状態はここで一元管理（DB 書き込みなし）
+  // 折りたたみ状態を ShareMapView で一元管理（DB 書き込みなし）
   const [localCollapsed, setLocalCollapsed] = useState(() => {
     const init = {};
     for (const n of nodes) if (n.collapsed) init[n.id] = true;
     return init;
   });
 
+  // MapMode と同じパターン：useNodesState + useEffect で react-flow に同期する
+  // これにより react-flow の内部キャッシュ問題を回避できる
+  const [rfNodes, setRfNodes, onRfNodesChange] = useNodesState([]);
+  const [rfEdges, setRfEdges, onRfEdgesChange] = useEdgesState([]);
+
   const handleToggle = useCallback((nodeId) => {
     setLocalCollapsed(prev => ({ ...prev, [nodeId]: !prev[nodeId] }));
   }, []);
 
-  const { rfNodes, rfEdges } = useMemo(() => {
+  // localCollapsed が変わるたびに rfNodes を再計算して react-flow に反映する
+  useEffect(() => {
     // localCollapsed を nodes にマージ
     const merged = nodes.map(n => ({ ...n, collapsed: localCollapsed[n.id] ?? false }));
 
@@ -121,16 +129,14 @@ export default function ShareMapView({ nodes }) {
     const positions = calcLayout(merged);
     const rootIds   = new Set(merged.filter(n => !n.parent_id).map(n => n.id));
 
-    const rfNodes = merged.map(n => ({
+    setRfNodes(merged.map(n => ({
       id:       n.id,
       position: positions[n.id] ?? { x: 0, y: 0 },
       type:     "shareNode",
       hidden:   hiddenIds.has(n.id),
-      // ⚠️ data オブジェクトを毎回新しく作ると onToggle が stale になるため
-      // onToggle は useCallback でメモ化済みのものを渡す
       data: {
         label:         n.content ?? "",
-        collapsed:     n.collapsed,   // ← localCollapsed 反映済みの値
+        collapsed:     n.collapsed,  // localCollapsed 反映済みの値
         hasChildren:   merged.some(c => c.parent_id === n.id),
         isRoot:        rootIds.has(n.id),
         bold:          n.bold,
@@ -140,20 +146,16 @@ export default function ShareMapView({ nodes }) {
         nodeColor:     n.node_color,
         onToggle:      () => handleToggle(n.id),
       },
-    }));
+    })));
 
-    const rfEdges = merged
-      .filter(n => n.parent_id)
-      .map(n => ({
-        id:     `e-${n.parent_id}-${n.id}`,
-        source: n.parent_id,
-        target: n.id,
-        type:   "smoothstep",
-        style:  EDGE_STYLE,
-        hidden: hiddenIds.has(n.id),
-      }));
-
-    return { rfNodes, rfEdges };
+    setRfEdges(merged.filter(n => n.parent_id).map(n => ({
+      id:     `e-${n.parent_id}-${n.id}`,
+      source: n.parent_id,
+      target: n.id,
+      type:   "smoothstep",
+      style:  EDGE_STYLE,
+      hidden: hiddenIds.has(n.id),
+    })));
   }, [nodes, localCollapsed, handleToggle]);
 
   return (
@@ -162,6 +164,8 @@ export default function ShareMapView({ nodes }) {
         nodes={rfNodes}
         edges={rfEdges}
         nodeTypes={nodeTypes}
+        onNodesChange={onRfNodesChange}
+        onEdgesChange={onRfEdgesChange}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}

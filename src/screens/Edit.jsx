@@ -15,7 +15,7 @@ export default function Edit({ mapId }) {
   const [nodes,     setNodes]     = useState([]);
   const [saveState, setSaveState] = useState("saved");
   const [loading,   setLoading]   = useState(true);
-  const [mode,      setMode]      = useState("list");
+  const [mode,      setMode]      = useState("map"); // デフォルトをマップ画面に変更
 
   useEffect(() => {
     if (!uid || !mapId) return;
