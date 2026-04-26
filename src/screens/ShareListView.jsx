@@ -5,6 +5,8 @@ const INDENT_PX = 24;
 
 /**
  * 読み取り専用箇条書きビュー（編集UI なし・書式表示のみ）
+ * flattenTree が collapsed ノードの子孫をスキップするため、
+ * #9 dead condition（collapsed_by_ancestor）を削除した。
  */
 export default function ShareListView({ nodes }) {
   const flatNodes = flattenTree(nodes);
@@ -15,16 +17,15 @@ export default function ShareListView({ nodes }) {
 
   return (
     <div style={{ padding: "24px 32px", maxWidth: 800, margin: "0 auto" }}>
-      {flatNodes.map(node => !node.collapsed_by_ancestor && (
+      {flatNodes.map(node => (
         <div
           key={node.id}
           style={{
             display: "flex", alignItems: "flex-start", gap: 8,
-            paddingLeft: node.depth * INDENT_PX,
-            marginBottom: 4,
             borderRadius: 6,
             background: node.node_color || "transparent",
             padding: `2px ${node.node_color ? 8 : 0}px 2px ${node.depth * INDENT_PX + (node.node_color ? 8 : 0)}px`,
+            marginBottom: 4,
           }}
         >
           <span style={{ color: T.muted, fontSize: 18, lineHeight: "26px", flexShrink: 0, userSelect: "none" }}>•</span>

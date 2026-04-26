@@ -18,7 +18,8 @@ export default function MmNode({ data, selected }) {
   useEffect(() => {
     if (editing && inputRef.current) {
       inputRef.current.focus();
-      inputRef.current.select();
+      // #2 モバイル等で select() が未サポートの場合に備えて try-catch
+      try { inputRef.current.select(); } catch (_) {}
       autoResizeTA(inputRef.current);
     }
   }, [editing]);
@@ -42,10 +43,9 @@ export default function MmNode({ data, selected }) {
 
   const showActions = (hovered || selected) && !editing;
 
-  // テキストスタイル（書式適用）
   const textStyle = {
-    fontWeight:     data.bold         ? 700    : undefined,
-    fontStyle:      data.italic       ? "italic" : "normal",
+    fontWeight:     data.bold         ? 700       : undefined,
+    fontStyle:      data.italic       ? "italic"  : "normal",
     textDecoration: data.strikethrough ? "line-through" : "none",
     color:          data.textColor    || undefined,
   };
@@ -67,7 +67,8 @@ export default function MmNode({ data, selected }) {
       >
         <Handle type="target" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
         <Handle type="source" position={Position.Right}
-          style={data.hasChildren ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 10, height: 10, right: -5, opacity: 1, pointerEvents: "none" }
+          style={data.hasChildren
+            ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 10, height: 10, right: -5, opacity: 1, pointerEvents: "none" }
             : { opacity: 0, pointerEvents: "none" }} />
 
         {selected && !editing && <FormatToolbar data={data} />}
@@ -95,7 +96,6 @@ export default function MmNode({ data, selected }) {
   }
 
   // ─── 子ノード ────────────────────────────────────────
-  const bg = data.nodeColor ? data.nodeColor : "transparent";
   const hasBg = !!data.nodeColor;
 
   return (
@@ -106,14 +106,15 @@ export default function MmNode({ data, selected }) {
       style={{
         position: "relative", display: "inline-flex", alignItems: "center",
         padding: hasBg ? "4px 8px" : "2px 4px", borderRadius: 6,
-        background: hasBg ? bg : (selected ? "rgba(168,85,247,0.07)" : "transparent"),
-        border: `1.5px solid ${selected ? "rgba(168,85,247,0.4)" : (hasBg ? "transparent" : "transparent")}`,
+        background: hasBg ? data.nodeColor : (selected ? "rgba(168,85,247,0.07)" : "transparent"),
+        border: `1.5px solid ${selected ? "rgba(168,85,247,0.4)" : "transparent"}`,
         cursor: "default", userSelect: "none", maxWidth: editing ? 400 : 240,
       }}
     >
       <Handle type="target" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
       <Handle type="source" position={Position.Right}
-        style={data.hasChildren ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 9, height: 9, right: -4.5, opacity: 1, pointerEvents: "none" }
+        style={data.hasChildren
+          ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 9, height: 9, right: -4.5, opacity: 1, pointerEvents: "none" }
           : { opacity: 0, pointerEvents: "none" }} />
 
       {selected && !editing && <FormatToolbar data={data} />}
@@ -184,41 +185,36 @@ function FormatToolbar({ data }) {
         whiteSpace: "nowrap",
       }}
     >
-      {/* 太字 */}
-      <ToolBtn active={data.bold} title="太字 (⌘B)" onClick={() => data.onToggleBold?.()}>
-        <b>B</b>
-      </ToolBtn>
-      {/* 斜体 */}
-      <ToolBtn active={data.italic} title="斜体 (⌘I)" onClick={() => data.onToggleItalic?.()}>
-        <i>I</i>
-      </ToolBtn>
-      {/* 取り消し線 */}
+      <ToolBtn active={data.bold}          title="太字 (⌘B)"  onClick={() => data.onToggleBold?.()}><b>B</b></ToolBtn>
+      <ToolBtn active={data.italic}        title="斜体 (⌘I)"  onClick={() => data.onToggleItalic?.()}><i>I</i></ToolBtn>
       <ToolBtn active={data.strikethrough} title="取り消し線" onClick={() => data.onToggleStrikethrough?.()}>
         <span style={{ textDecoration: "line-through" }}>S</span>
       </ToolBtn>
 
       <Sep />
 
-      {/* 文字色 */}
-      <ColorBtn
+      {/* 文字色 + リセットボタン（#10） */}
+      <ColorGroup
         title="文字色"
         value={data.textColor || "#374151"}
-        indicator={<span style={{ color: "#fff", fontWeight: 700, fontSize: 13 }}>A</span>}
-        indicatorUnder={data.textColor}
+        hasValue={!!data.textColor}
+        indicator={
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+            <span style={{ color: "#fff", fontWeight: 700, fontSize: 13, lineHeight: 1 }}>A</span>
+            <div style={{ width: 14, height: 3, borderRadius: 1, background: data.textColor || "#fff" }} />
+          </div>
+        }
         onChange={c => data.onTextColorChange?.(c)}
         onReset={() => data.onTextColorChange?.(null)}
       />
 
-      {/* ノード背景色 */}
-      <ColorBtn
+      {/* ノード背景色 + リセットボタン（#10） */}
+      <ColorGroup
         title="ノード背景色"
         value={data.nodeColor || "#ffffff"}
+        hasValue={!!data.nodeColor}
         indicator={
-          <div style={{
-            width: 14, height: 14, borderRadius: 3,
-            background: data.nodeColor || "#e5e7eb",
-            border: "1.5px solid rgba(255,255,255,0.3)",
-          }} />
+          <div style={{ width: 14, height: 14, borderRadius: 3, background: data.nodeColor || "#e5e7eb", border: "1.5px solid rgba(255,255,255,0.3)" }} />
         }
         onChange={c => data.onNodeColorChange?.(c)}
         onReset={() => data.onNodeColorChange?.(null)}
@@ -230,7 +226,7 @@ function FormatToolbar({ data }) {
 function ToolBtn({ children, active, onClick, title }) {
   const [h, setH] = useState(false);
   return (
-    <button title={title} onClick={(e) => { e.stopPropagation(); onClick(); }}
+    <button title={title} onClick={e => { e.stopPropagation(); onClick(); }}
       onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
       style={{
         background: active ? "rgba(168,85,247,0.5)" : (h ? "rgba(255,255,255,0.1)" : "transparent"),
@@ -246,22 +242,27 @@ function Sep() {
   return <div style={{ width: 1, height: 18, background: "#374151", margin: "0 4px" }} />;
 }
 
-function ColorBtn({ title, value, indicator, indicatorUnder, onChange, onReset }) {
+/**
+ * カラーピッカー + リセット（✕）ボタンのセット（#10 対応）
+ * hasValue=true の時だけリセットボタンを表示する
+ */
+function ColorGroup({ title, value, hasValue, indicator, onChange, onReset }) {
   const inputRef = useRef(null);
+  const [h, setH] = useState(false);
   return (
-    <div title={title} style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
       <button
+        title={title}
         onClick={e => { e.stopPropagation(); inputRef.current?.click(); }}
+        onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
         style={{
-          background: "transparent", border: "none",
+          background: h ? "rgba(255,255,255,0.1)" : "transparent",
+          border: "none", borderRadius: 5,
           width: 30, height: 30, display: "flex", flexDirection: "column",
           alignItems: "center", justifyContent: "center", cursor: "pointer", gap: 2,
         }}
       >
         {indicator}
-        {indicatorUnder !== undefined && (
-          <div style={{ width: 14, height: 3, borderRadius: 1, background: indicatorUnder || "#ffffff" }} />
-        )}
       </button>
       <input
         ref={inputRef}
@@ -270,11 +271,23 @@ function ColorBtn({ title, value, indicator, indicatorUnder, onChange, onReset }
         onChange={e => onChange(e.target.value)}
         style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
       />
+      {/* #10 色が設定されている場合のみリセットボタン表示 */}
+      {hasValue && (
+        <button
+          title={`${title}をリセット`}
+          onClick={e => { e.stopPropagation(); onReset(); }}
+          style={{
+            background: "transparent", border: "none",
+            color: "rgba(255,255,255,0.5)", fontSize: 10,
+            width: 16, height: 16, cursor: "pointer", padding: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            borderRadius: 3,
+          }}
+        >✕</button>
+      )}
     </div>
   );
 }
-
-// ─── クイックアクションボタン ────────────────────────────
 
 function QuickBtn({ children, title, onClick, posStyle }) {
   const [h, setH] = useState(false);

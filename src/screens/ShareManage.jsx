@@ -8,32 +8,49 @@ const DANGER  = "#ef4444";
 const SUCCESS = "#16a34a";
 
 export default function ShareManage({ mapId }) {
-  const [links,     setLinks]     = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [creating,  setCreating]  = useState(false);
-  const [newNote,   setNewNote]   = useState("");
-  const [newExpiry, setNewExpiry] = useState("");
-  const [copiedId,  setCopiedId]  = useState(null);
+  const [links,      setLinks]      = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [loadError,  setLoadError]  = useState(null); // #3 追加
+  const [creating,   setCreating]   = useState(false);
+  const [newNote,    setNewNote]    = useState("");
+  const [newExpiry,  setNewExpiry]  = useState("");
+  const [copiedId,   setCopiedId]   = useState(null);
 
   useEffect(() => { loadLinks(); }, [mapId]);
-
-  async function loadLinks() {
-    setLoading(true);
-    try {
-      const res  = await fetch(
-        `/api/internal/list-share-links?map_id=${mapId}`,
-        { headers: authHeaders() }
-      );
-      setLinks(res.ok ? await res.json() : []);
-    } catch { setLinks([]); }
-    setLoading(false);
-  }
 
   function authHeaders() {
     return {
       "Content-Type":  "application/json",
       "Authorization": `Bearer ${window.__MM_SECRET__ ?? ""}`,
     };
+  }
+
+  // #3 修正：失敗時にエラーメッセージを表示する
+  async function loadLinks() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await fetch(
+        `/api/internal/list-share-links?map_id=${mapId}`,
+        { headers: authHeaders() }
+      );
+      if (!res.ok) {
+        const body = await res.text();
+        // 401 は環境変数未設定の可能性が高い
+        if (res.status === 401) {
+          setLoadError("認証エラー：Cloudflare Pages に VITE_MM_INTERNAL_SECRET が設定されているか確認してください。");
+        } else {
+          setLoadError(`データ取得に失敗しました（HTTP ${res.status}）`);
+        }
+        setLinks([]);
+      } else {
+        setLinks(await res.json());
+      }
+    } catch (e) {
+      setLoadError("ネットワークエラー：API に接続できませんでした。");
+      setLinks([]);
+    }
+    setLoading(false);
   }
 
   async function handleCreate() {
@@ -47,7 +64,7 @@ export default function ShareManage({ mapId }) {
       });
       if (res.ok) { setNewNote(""); setNewExpiry(""); await loadLinks(); }
       else alert("作成に失敗しました。");
-    } catch { alert("作成に失敗しました。"); }
+    } catch { alert("作成に失敗しました（ネットワークエラー）。"); }
     setCreating(false);
   }
 
@@ -55,24 +72,22 @@ export default function ShareManage({ mapId }) {
     if (!window.confirm("このリンクを無効化しますか？\nアクセスできなくなります。")) return;
     try {
       const res = await fetch("/api/internal/revoke-share-link", {
-        method: "POST", headers: authHeaders(),
-        body: JSON.stringify({ share_link_id: linkId }),
+        method: "POST", headers: authHeaders(), body: JSON.stringify({ share_link_id: linkId }),
       });
       if (res.ok) await loadLinks();
       else alert("無効化に失敗しました。");
-    } catch { alert("無効化に失敗しました。"); }
+    } catch { alert("無効化に失敗しました（ネットワークエラー）。"); }
   }
 
   async function handleReactivate(linkId) {
-    if (!window.confirm("このリンクを再有効化しますか？\n再び誰でもアクセスできるようになります。")) return;
+    if (!window.confirm("このリンクを再有効化しますか？")) return;
     try {
       const res = await fetch("/api/internal/reactivate-share-link", {
-        method: "POST", headers: authHeaders(),
-        body: JSON.stringify({ share_link_id: linkId }),
+        method: "POST", headers: authHeaders(), body: JSON.stringify({ share_link_id: linkId }),
       });
       if (res.ok) await loadLinks();
       else alert("再有効化に失敗しました。");
-    } catch { alert("再有効化に失敗しました。"); }
+    } catch { alert("再有効化に失敗しました（ネットワークエラー）。"); }
   }
 
   async function handleCopy(url, linkId) {
@@ -106,13 +121,9 @@ export default function ShareManage({ mapId }) {
     formRow: { display: "flex", gap: 10, marginBottom: 12, alignItems: "flex-end", flexWrap: "wrap" },
     label: { fontSize: 12, color: T.muted, marginBottom: 4, display: "block" },
     input: { background: T.bg, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, color: T.fg, fontFamily: "inherit", outline: "none" },
-    btn: (color, filled = true) => ({
-      background: filled ? color : "none",
-      border: `1px solid ${color}`,
-      borderRadius: 6, padding: "4px 10px", fontSize: 12,
-      color: filled ? "#fff" : color, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap",
-    }),
+    btn: (color) => ({ background: "none", border: `1px solid ${color}`, borderRadius: 6, padding: "4px 10px", fontSize: 12, color, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }),
     createBtn: { background: PURPLE, color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 600, cursor: creating ? "default" : "pointer", opacity: creating ? 0.6 : 1 },
+    errorBox: { background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 8, padding: "12px 16px", fontSize: 13, color: DANGER, marginBottom: 24 },
   };
 
   return (
@@ -123,6 +134,11 @@ export default function ShareManage({ mapId }) {
       </div>
 
       <div style={s.body}>
+        {/* #3 エラー表示 */}
+        {loadError && (
+          <div style={s.errorBox}>{loadError}</div>
+        )}
+
         {/* 新規作成フォーム */}
         <div style={s.section}>
           <div style={s.sectionTitle}>+ 新規共有URLを作成</div>
@@ -151,7 +167,7 @@ export default function ShareManage({ mapId }) {
           <div style={s.sectionTitle}>有効な共有URL（{activeLinks.length}件）</div>
           {loading ? (
             <div style={{ color: T.muted, fontSize: 13 }}>読み込み中...</div>
-          ) : activeLinks.length === 0 ? (
+          ) : !loadError && activeLinks.length === 0 ? (
             <div style={{ color: T.muted, fontSize: 13 }}>まだURLがありません。上のフォームから発行してください。</div>
           ) : activeLinks.map(link => (
             <LinkCard key={link.id} link={link}
@@ -160,7 +176,7 @@ export default function ShareManage({ mapId }) {
           ))}
         </div>
 
-        {/* 無効化済み一覧（再有効化ボタン付き） */}
+        {/* 無効化済み一覧 */}
         {inactiveLinks.length > 0 && (
           <div style={s.section}>
             <div style={s.sectionTitle}>無効化済み（{inactiveLinks.length}件）</div>
@@ -187,30 +203,21 @@ function LinkCard({ link, onCopy, onRevoke, onReactivate, copiedId, s }) {
           {!link.active ? "無効" : expired ? "期限切れ" : "有効"}
         </span>
         <span style={s.urlText}>{link.share_url}</span>
-
-        {/* 有効なリンク：コピー + 無効化 */}
         {link.active && (
           <>
-            <button style={s.btn(copied ? "#16a34a" : "#6b7280", false)}
+            <button style={s.btn(copied ? "#16a34a" : "#6b7280")}
               onClick={() => onCopy(link.share_url, link.id)}>
               {copied ? "コピー済" : "URLをコピー"}
             </button>
-            <button style={s.btn(DANGER, false)} onClick={() => onRevoke?.(link.id)}>
-              無効化
-            </button>
+            <button style={s.btn("#ef4444")} onClick={() => onRevoke?.(link.id)}>無効化</button>
           </>
         )}
-
-        {/* 無効化済みリンク：再有効化 */}
         {!link.active && (
-          <button style={s.btn("#6b7280", false)} onClick={() => onReactivate?.(link.id)}>
-            再有効化
-          </button>
+          <button style={s.btn("#6b7280")} onClick={() => onReactivate?.(link.id)}>再有効化</button>
         )}
       </div>
-
       <div style={s.metaRow}>
-        {link.note && <span>📝 {link.note}</span>}
+        {link.note         && <span>📝 {link.note}</span>}
         <span>閲覧 {link.view_count ?? 0}回</span>
         {link.last_viewed_at && <span>最終閲覧: {new Date(link.last_viewed_at).toLocaleDateString("ja-JP")}</span>}
         {link.expires_at     && <span>期限: {new Date(link.expires_at).toLocaleDateString("ja-JP")}</span>}
