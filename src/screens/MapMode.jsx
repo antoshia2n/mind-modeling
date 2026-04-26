@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import {
   ReactFlow, Background, Controls, BackgroundVariant,
-  useNodesState, useEdgesState,
+  useNodesState, useEdgesState, Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { createNode, updateNode, deleteNode } from "../lib/supabase.js";
@@ -45,21 +45,15 @@ function collectSubtree(nodeId, nodes) {
     const node = nodes.find(n => n.id === id);
     if (!node) return;
     const myIdx = result.length;
-    result.push({
-      content: node.content ?? "", parentIdx,
-      bold: node.bold ?? false, italic: node.italic ?? false,
-      strikethrough: node.strikethrough ?? false,
-      text_color: node.text_color ?? null, node_color: node.node_color ?? null,
-    });
+    result.push({ content: node.content ?? "", parentIdx,
+      bold: node.bold ?? false, italic: node.italic ?? false, strikethrough: node.strikethrough ?? false,
+      text_color: node.text_color ?? null, node_color: node.node_color ?? null });
     nodes.filter(n => n.parent_id === id).sort((a, b) => a.order_index - b.order_index).forEach(c => dfs(c.id, myIdx));
   }
   dfs(nodeId, -1);
   return result;
 }
 
-/**
- * @param {string} layoutMode - "bi"（双方向）または "lr"（左→右）
- */
 export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesChange, onSaved }) {
   const saveTimers = useRef({});
   const [rfNodes, setRfNodes, onRfNodesChange] = useNodesState([]);
@@ -125,8 +119,8 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     if (!node) return;
     const hiddenIds = getHiddenIds(nodes);
     if (direction === "right") {
-      const children = nodes.filter(n => n.parent_id === nodeId && !hiddenIds.has(n.id)).sort((a, b) => a.order_index - b.order_index);
-      if (children.length > 0) setSelectedId(children[0].id);
+      const ch = nodes.filter(n => n.parent_id === nodeId && !hiddenIds.has(n.id)).sort((a, b) => a.order_index - b.order_index);
+      if (ch.length > 0) setSelectedId(ch[0].id);
     } else if (direction === "left") {
       if (node.parent_id) setSelectedId(node.parent_id);
     } else {
@@ -152,26 +146,23 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
 
   const copySubtree = useCallback(async (nodeId) => {
     const subtree = collectSubtree(nodeId, nodes);
-    try {
-      await navigator.clipboard.writeText(JSON.stringify({ mmCopy: true, nodes: subtree }));
-      showToast(`${subtree.length}ノードをコピーしました`);
-    } catch { showToast("クリップボードの許可が必要です"); }
+    try { await navigator.clipboard.writeText(JSON.stringify({ mmCopy: true, nodes: subtree })); showToast(`${subtree.length}ノードをコピーしました`); }
+    catch { showToast("クリップボードの許可が必要です"); }
   }, [nodes]);
 
   const pasteSubtree = useCallback(async (parentId) => {
     let text;
     try { text = await navigator.clipboard.readText(); } catch { showToast("クリップボードの許可が必要です"); return; }
-    let payload;
-    try { payload = JSON.parse(text); } catch { return; }
+    let payload; try { payload = JSON.parse(text); } catch { return; }
     if (!payload?.mmCopy || !Array.isArray(payload.nodes)) return;
     const idMap = {}, newNodes = [];
     for (let i = 0; i < payload.nodes.length; i++) {
       const { content, parentIdx, bold, italic, strikethrough, text_color, node_color } = payload.nodes[i];
       const actualParentId = parentIdx === -1 ? parentId : idMap[parentIdx];
-      const current  = [...nodes, ...newNodes];
+      const current = [...nodes, ...newNodes];
       const siblings = current.filter(n => n.parent_id === actualParentId);
-      const newOrder = siblings.length > 0 ? Math.max(...siblings.map(n => n.order_index)) + 1024 : 1024;
-      const newNode  = await createNode(uid, mapId, actualParentId, newOrder, content, { bold, italic, strikethrough, text_color, node_color });
+      const newOrder  = siblings.length > 0 ? Math.max(...siblings.map(n => n.order_index)) + 1024 : 1024;
+      const newNode   = await createNode(uid, mapId, actualParentId, newOrder, content, { bold, italic, strikethrough, text_color, node_color });
       if (!newNode) continue;
       idMap[i] = newNode.id; newNodes.push(newNode);
     }
@@ -207,40 +198,67 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedId, addSibling, addChild, toggleCollapse, removeNode, moveSelection, copySubtree, pasteSubtree, toggleFormat]);
 
-  // layoutMode が変わったら fitView をトリガーするため、key として使う
   useEffect(() => {
-    const positions = calcLayout(nodes, layoutMode);
-    const hiddenIds  = getHiddenIds(nodes);
-    const rootIds    = new Set(nodes.filter(n => !n.parent_id).map(n => n.id));
+    const { positions, directions } = calcLayout(nodes, layoutMode);
+    const hiddenIds = getHiddenIds(nodes);
+    const rootIds   = new Set(nodes.filter(n => !n.parent_id).map(n => n.id));
 
-    setRfNodes(nodes.map(n => ({
-      id: n.id, position: positions[n.id] ?? { x: 0, y: 0 },
-      type: "mmNode", hidden: hiddenIds.has(n.id), selected: n.id === selectedId,
-      data: {
-        label: n.content ?? "", collapsed: n.collapsed,
-        hasChildren: nodes.some(c => c.parent_id === n.id),
-        isRoot: rootIds.has(n.id), forceEdit: n.id === forceEditId,
-        bold: n.bold, italic: n.italic, strikethrough: n.strikethrough,
-        textColor: n.text_color, nodeColor: n.node_color,
-        onContentChange:       (v) => handleContentChange(n.id, v),
-        onToggleCollapse:      ()  => toggleCollapse(n.id),
-        onAddChild:            ()  => addChild(n.id),
-        onAddSiblingAbove:     ()  => addSibling(n.id, "before"),
-        onAddSiblingBelow:     ()  => addSibling(n.id, "after"),
-        onToggleBold:          ()  => toggleFormat(n.id, "bold"),
-        onToggleItalic:        ()  => toggleFormat(n.id, "italic"),
-        onToggleStrikethrough: ()  => toggleFormat(n.id, "strikethrough"),
-        onTextColorChange:     (c) => setColor(n.id, "text_color", c),
-        onNodeColorChange:     (c) => setColor(n.id, "node_color", c),
-        onEditStart: () => { setEditingId(n.id); setForceEditId(null); },
-        onEditEnd:   () => setEditingId(null),
-      },
-    })));
+    setRfNodes(nodes.map(n => {
+      const dir     = directions[n.id] ?? "right";
+      const isLeft  = dir === "left";
+      const isRoot  = rootIds.has(n.id);
+      // 子の中に左/右それぞれがいるか（ルートノード用）
+      const hasRightChildren = isRoot && nodes.some(c => c.parent_id === n.id && directions[c.id] === "right");
+      const hasLeftChildren  = isRoot && nodes.some(c => c.parent_id === n.id && directions[c.id] === "left");
 
-    setRfEdges(nodes.filter(n => n.parent_id).map(n => ({
-      id: `e-${n.parent_id}-${n.id}`, source: n.parent_id, target: n.id,
-      type: "smoothstep", style: EDGE_STYLE, hidden: hiddenIds.has(n.id),
-    })));
+      return {
+        id:       n.id,
+        position: positions[n.id] ?? { x: 0, y: 0 },
+        type:     "mmNode",
+        hidden:   hiddenIds.has(n.id),
+        selected: n.id === selectedId,
+        // react-flow がこのノードの Handle 方向を決定する
+        sourcePosition: isLeft ? Position.Left  : Position.Right,
+        targetPosition: isLeft ? Position.Right : Position.Left,
+        data: {
+          label: n.content ?? "", collapsed: n.collapsed,
+          hasChildren: nodes.some(c => c.parent_id === n.id),
+          hasRightChildren, hasLeftChildren,
+          isRoot, direction: dir,
+          forceEdit: n.id === forceEditId,
+          bold: n.bold, italic: n.italic, strikethrough: n.strikethrough,
+          textColor: n.text_color, nodeColor: n.node_color,
+          onContentChange:       (v) => handleContentChange(n.id, v),
+          onToggleCollapse:      ()  => toggleCollapse(n.id),
+          onAddChild:            ()  => addChild(n.id),
+          onAddSiblingAbove:     ()  => addSibling(n.id, "before"),
+          onAddSiblingBelow:     ()  => addSibling(n.id, "after"),
+          onToggleBold:          ()  => toggleFormat(n.id, "bold"),
+          onToggleItalic:        ()  => toggleFormat(n.id, "italic"),
+          onToggleStrikethrough: ()  => toggleFormat(n.id, "strikethrough"),
+          onTextColorChange:     (c) => setColor(n.id, "text_color", c),
+          onNodeColorChange:     (c) => setColor(n.id, "node_color", c),
+          onEditStart: () => { setEditingId(n.id); setForceEditId(null); },
+          onEditEnd:   () => setEditingId(null),
+        },
+      };
+    }));
+
+    setRfEdges(nodes.filter(n => n.parent_id).map(n => {
+      const isLeft = (directions[n.id] ?? "right") === "left";
+      return {
+        id:           `e-${n.parent_id}-${n.id}`,
+        source:       n.parent_id,
+        target:       n.id,
+        // 左展開: 親の left-source → 子の right-target
+        // 右展開: 親の right-source → 子の left-target
+        sourceHandle: isLeft ? "sl" : "sr",
+        targetHandle: isLeft ? "tr" : "tl",
+        type:         "smoothstep",
+        style:        EDGE_STYLE,
+        hidden:       hiddenIds.has(n.id),
+      };
+    }));
   }, [nodes, selectedId, forceEditId, layoutMode, handleContentChange, toggleCollapse, addChild, addSibling, toggleFormat, setColor]);
 
   const handleNodeDragStop = useCallback(async (event, node, allRfNodes) => {
@@ -248,8 +266,8 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     if (target) {
       const descendants = getDescendantIds(node.id, nodes);
       if (descendants.includes(target.id) || target.id === node.id) {
-        const pos = calcLayout(nodes, layoutMode);
-        setRfNodes(prev => prev.map(n => ({ ...n, position: pos[n.id] ?? n.position }))); return;
+        const { positions } = calcLayout(nodes, layoutMode);
+        setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position }))); return;
       }
       const newSiblings = nodes.filter(n => n.parent_id === target.id);
       const newOrder    = newSiblings.length > 0 ? Math.max(...newSiblings.map(n => n.order_index)) + 1024 : 1024;
@@ -257,17 +275,16 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       onNodesChange(nodes.map(n => n.id === node.id ? { ...n, parent_id: target.id, order_index: newOrder, x: null, y: null } : n));
       onSaved();
     } else {
-      const pos = calcLayout(nodes, layoutMode);
-      setRfNodes(prev => prev.map(n => ({ ...n, position: pos[n.id] ?? n.position })));
+      const { positions } = calcLayout(nodes, layoutMode);
+      setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position })));
     }
   }, [nodes, layoutMode, onNodesChange, onSaved, setRfNodes]);
 
-  const handleNodeClick  = useCallback((e, node) => { setSelectedId(node.id); setForceEditId(null); }, []);
-  const handlePaneClick  = useCallback(() => { if (!editingId) { setSelectedId(null); setForceEditId(null); } }, [editingId]);
+  const handleNodeClick = useCallback((e, node) => { setSelectedId(node.id); setForceEditId(null); }, []);
+  const handlePaneClick = useCallback(() => { if (!editingId) { setSelectedId(null); setForceEditId(null); } }, [editingId]);
 
   return (
     <div style={{ width: "100%", height: "calc(100vh - 53px)", position: "relative" }}>
-      {/* layoutMode が変わったら ReactFlow を再マウントして fitView を確実に適用 */}
       <ReactFlow
         key={layoutMode}
         nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes}
@@ -282,21 +299,15 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
         <Background variant={BackgroundVariant.Dots} color="#c7cade" gap={22} size={1.5} />
         <Controls showInteractive={false} />
       </ReactFlow>
-
       {toastMsg && (
-        <div style={{
-          position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)",
-          background: "rgba(30,30,40,0.85)", color: "#fff",
-          borderRadius: 8, padding: "8px 18px", fontSize: 13, pointerEvents: "none",
-        }}>{toastMsg}</div>
+        <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(30,30,40,0.85)", color: "#fff", borderRadius: 8,
+          padding: "8px 18px", fontSize: 13, pointerEvents: "none" }}>{toastMsg}</div>
       )}
-
-      <div style={{
-        position: "absolute", bottom: 16, right: 16,
+      <div style={{ position: "absolute", bottom: 16, right: 16,
         background: "rgba(255,255,255,0.92)", border: "1px solid #e2e8f0",
-        borderRadius: 8, padding: "8px 12px",
-        fontSize: 11, color: "#94a3b8", lineHeight: 1.9, pointerEvents: "none",
-      }}>
+        borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#94a3b8",
+        lineHeight: 1.9, pointerEvents: "none" }}>
         <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟追加 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加</div>
         <div><b style={{color:"#6b7280"}}>⌘B</b> 太字 ・ <b style={{color:"#6b7280"}}>⌘I</b> 斜体</div>
         <div><b style={{color:"#6b7280"}}>⌘C/V</b> サブツリーコピペ ・ <b style={{color:"#6b7280"}}>Del</b> 削除</div>

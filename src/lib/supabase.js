@@ -70,14 +70,12 @@ export async function getNodes(mapId) {
 
 /**
  * ノードを新規作成して返す
- *
  * @param {string} uid
  * @param {string} mapId
  * @param {string|null} parentId
  * @param {number} orderIndex
  * @param {string} content
  * @param {object} format - 書式設定（コピペ時に引き継ぐ）
- *   { bold, italic, strikethrough, text_color, node_color }
  */
 export async function createNode(uid, mapId, parentId, orderIndex, content = "", format = {}) {
   const { data, error } = await supabase
@@ -88,7 +86,6 @@ export async function createNode(uid, mapId, parentId, orderIndex, content = "",
       parent_id:   parentId ?? null,
       order_index: orderIndex,
       content,
-      // 書式フィールド（未指定は DB デフォルト値が入る）
       ...(format.bold          !== undefined && { bold:          format.bold }),
       ...(format.italic        !== undefined && { italic:        format.italic }),
       ...(format.strikethrough !== undefined && { strikethrough: format.strikethrough }),
@@ -115,18 +112,4 @@ export async function deleteNode(nodeId) {
     .delete()
     .eq("id", nodeId);
   if (error) console.error("[mm] deleteNode:", error);
-}
-
-export async function updateNodesBatch(updates) {
-  for (const u of updates) {
-    const { error } = await supabase
-      .from("mm_nodes")
-      .update({
-        order_index: u.order_index,
-        parent_id:   u.parent_id ?? null,
-        updated_at:  new Date().toISOString(),
-      })
-      .eq("id", u.id);
-    if (error) console.error("[mm] updateNodesBatch:", error, u);
-  }
 }
