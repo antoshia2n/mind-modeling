@@ -9,7 +9,12 @@ const ACCENT  = "#3b82f6";
 const DANGER  = "#ef4444";
 const WARNING = "#f59e0b";
 const MAX_WARN_NODES = 10000;
-const HELP_KEY = "mm_import_help_open";
+const HELP_KEY       = "mm_import_help_open";
+const LAST_FOLDER_KEY = "mm_import_last_folder_id";
+
+function authH() {
+  return { "Content-Type": "application/json", "Authorization": `Bearer ${window.__MM_SECRET__ ?? ""}` };
+}
 
 export default function ImportScreen() {
   const uid = useAuthUid();
@@ -21,13 +26,25 @@ export default function ImportScreen() {
   const [importing,   setImporting]   = useState(false);
   const [toast,       setToast]       = useState(null);
   const [titleEdited, setTitleEdited] = useState(false);
-  // ヘルプの開閉状態を localStorage に記憶（初回のみ開く）
-  const [helpOpen, setHelpOpen] = useState(() => {
-    const stored = localStorage.getItem(HELP_KEY);
-    return stored === null ? true : stored === "1";
+  const [helpOpen,    setHelpOpen]    = useState(() => {
+    const s = localStorage.getItem(HELP_KEY);
+    return s === null ? true : s === "1";
   });
 
+  // フォルダ選択
+  const [folders,          setFolders]         = useState([]);
+  const [selectedFolderId, setSelectedFolderId] = useState(() => localStorage.getItem(LAST_FOLDER_KEY) ?? null);
+
   const textareaRef = useRef(null);
+
+  // フォルダ一覧取得
+  useEffect(() => {
+    if (!uid) return;
+    fetch(`/api/internal/list-folders?user_id=${uid}`, { headers: authH() })
+      .then(r => r.json())
+      .then(d => setFolders(d.items ?? []))
+      .catch(() => {});
+  }, [uid]);
 
   function toggleHelp() {
     const next = !helpOpen;
@@ -43,16 +60,25 @@ export default function ImportScreen() {
   }, [rawText, titleEdited]);
 
   function handleTitleChange(e) { setTitle(e.target.value); setTitleEdited(true); }
+
   function showToast(msg, type = "success") { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); }
 
   function resetForm() {
     setRawText(""); setTitle(""); setNote(""); setPreview(null); setTitleEdited(false);
+    // フォルダ選択は引き継ぐ（連続インポート時の効率化）
     setTimeout(() => textareaRef.current?.focus(), 80);
+  }
+
+  function handleFolderChange(e) {
+    const fid = e.target.value || null;
+    setSelectedFolderId(fid);
+    if (fid) localStorage.setItem(LAST_FOLDER_KEY, fid);
+    else localStorage.removeItem(LAST_FOLDER_KEY);
   }
 
   const handleImport = useCallback(async () => {
     if (!rawText.trim() || !title.trim() || importing) return;
-    if (preview?.nodeCount > MAX_WARN_NODES) {
+    if ((preview?.nodeCount ?? 0) > MAX_WARN_NODES) {
       if (!window.confirm(`このマップは ${preview.nodeCount} ノードあります。続行しますか？`)) return;
     }
     setImporting(true);
@@ -61,55 +87,56 @@ export default function ImportScreen() {
     try {
       res = await fetch("/api/internal/import-text-to-map", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.__MM_SECRET__ ?? ""}` },
+        headers: authH(),
         body: JSON.stringify({ title: title.trim(), indented_text: rawText, user_id: uid, source_note: note.trim() || null }),
       });
-    } catch {
-      showToast("ネットワークに接続できません。", "error");
-      setImporting(false); return;
-    }
+    } catch { showToast("ネットワークに接続できません。", "error"); setImporting(false); return; }
 
     let data;
     try { data = await res.json(); } catch {
-      showToast(`サーバーエラーが発生しました（HTTP ${res.status}）。`, "error");
-      setImporting(false); return;
+      showToast(`サーバーエラー（HTTP ${res.status}）`, "error"); setImporting(false); return;
     }
+    if (!res.ok) { showToast(data?.message || `インポートに失敗しました（HTTP ${res.status}）`, "error"); setImporting(false); return; }
 
-    if (!res.ok) {
-      showToast(data?.message || data?.error || `インポートに失敗しました（HTTP ${res.status}）`, "error");
-      setImporting(false); return;
+    // フォルダに紐付け
+    if (selectedFolderId && data.map_id) {
+      await fetch("/api/internal/move-map-to-folder", {
+        method: "POST", headers: authH(),
+        body: JSON.stringify({ map_id: data.map_id, user_id: uid, folder_id: selectedFolderId }),
+      }).catch(() => {});
     }
 
     showToast(`✓ インポート完了（${data.node_count ?? preview?.nodeCount ?? 0}ノード）`, "success");
     setImporting(false);
     setTimeout(resetForm, 800);
-  }, [rawText, title, note, uid, preview, importing]);
+  }, [rawText, title, note, uid, preview, importing, selectedFolderId]);
 
   const canImport = rawText.trim() && title.trim() && (preview?.nodeCount ?? 0) > 0 && !importing;
 
   const s = {
     wrap: { minHeight: "100vh", background: T.bg, color: T.fg, fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif", display: "flex", flexDirection: "column" },
-    header: { padding: "12px 24px", borderBottom: `1px solid ${BORDER}`, display: "flex", alignItems: "center", gap: 14, flexShrink: 0, height: 53, boxSizing: "border-box" },
+    header: { padding: "12px 20px", borderBottom: `1px solid ${BORDER}`, display: "flex", alignItems: "center", gap: 12, flexShrink: 0, height: 53, boxSizing: "border-box" },
     backBtn: { background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14, padding: 0 },
-    headerTitle: { flex: 1, fontSize: 16, fontWeight: 700 },
-    historyLink: { background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "5px 12px", fontSize: 13, color: T.muted, cursor: "pointer", whiteSpace: "nowrap" },
-    body: { flex: 1, padding: "24px 32px", maxWidth: 860, margin: "0 auto", width: "100%", boxSizing: "border-box" },
-    help: { background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, marginBottom: 20, overflow: "hidden" },
+    headerTitle: { flex: 1, fontSize: 15, fontWeight: 700 },
+    historyLink: { background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "5px 12px", fontSize: 12, color: T.muted, cursor: "pointer" },
+    body: { flex: 1, padding: "20px 24px", maxWidth: 860, margin: "0 auto", width: "100%", boxSizing: "border-box" },
+    help: { background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, marginBottom: 18, overflow: "hidden" },
     helpHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", cursor: "pointer", userSelect: "none" },
     helpTitle: { fontSize: 13, fontWeight: 700, color: "#0369a1" },
     helpContent: { padding: "0 16px 14px", fontSize: 13, color: "#0369a1", lineHeight: 1.9 },
     helpCode: { background: "#e0f2fe", borderRadius: 6, padding: "8px 12px", fontFamily: "'DM Mono','JetBrains Mono',monospace", fontSize: 12, marginTop: 8, lineHeight: 1.7 },
-    section: { marginBottom: 18 },
-    label: { fontSize: 13, fontWeight: 600, color: T.fg, marginBottom: 8, display: "block" },
+    section: { marginBottom: 16 },
+    label: { fontSize: 13, fontWeight: 600, color: T.fg, marginBottom: 6, display: "block" },
     sublabel: { fontSize: 12, color: T.muted, marginLeft: 8, fontWeight: 400 },
     textarea: { width: "100%", boxSizing: "border-box", height: 180, resize: "vertical", background: T.surface, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "12px 14px", fontSize: 14, color: T.fg, fontFamily: "'DM Mono','JetBrains Mono',monospace", outline: "none", lineHeight: 1.6 },
-    previewBox: { background: "#f8fafc", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "12px 14px", fontFamily: "'DM Mono','JetBrains Mono',monospace", fontSize: 12, lineHeight: 1.7, color: "#374151", whiteSpace: "pre", overflowX: "auto", maxHeight: 240, overflowY: "auto" },
-    nodeCount: (n) => ({ fontSize: 13, fontWeight: 600, marginBottom: 8, color: n > MAX_WARN_NODES ? DANGER : (n > 500 ? WARNING : ACCENT) }),
+    previewBox: { background: "#f8fafc", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "12px 14px", fontFamily: "'DM Mono','JetBrains Mono',monospace", fontSize: 12, lineHeight: 1.7, color: "#374151", whiteSpace: "pre", overflowX: "auto", maxHeight: 200, overflowY: "auto" },
+    nodeCount: (n) => ({ fontSize: 13, fontWeight: 600, marginBottom: 6, color: n > MAX_WARN_NODES ? DANGER : (n > 500 ? WARNING : ACCENT) }),
     errorBox: { background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "8px 12px", fontSize: 12, color: DANGER, marginBottom: 8, lineHeight: 1.7 },
-    input: { width: "100%", boxSizing: "border-box", background: T.surface, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 14px", fontSize: 14, color: T.fg, fontFamily: "inherit", outline: "none" },
+    input: { width: "100%", boxSizing: "border-box", background: T.surface, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: T.fg, fontFamily: "inherit", outline: "none" },
+    select: { width: "100%", boxSizing: "border-box", background: T.surface, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: T.fg, fontFamily: "inherit", outline: "none", cursor: "pointer" },
     btnRow: { display: "flex", gap: 10, alignItems: "center" },
-    clearBtn: { background: "none", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 18px", fontSize: 14, color: T.muted, cursor: "pointer" },
-    importBtn: (can) => ({ background: can ? PURPLE : "#e2e8f0", color: can ? "#fff" : "#94a3b8", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 14, fontWeight: 700, cursor: can ? "pointer" : "default", flex: 1 }),
+    clearBtn: { background: "none", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 16px", fontSize: 13, color: T.muted, cursor: "pointer" },
+    importBtn: (can) => ({ background: can ? PURPLE : "#e2e8f0", color: can ? "#fff" : "#94a3b8", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 14, fontWeight: 700, cursor: can ? "pointer" : "default", flex: 1 }),
   };
 
   return (
@@ -121,7 +148,7 @@ export default function ImportScreen() {
       </div>
 
       <div style={s.body}>
-        {/* ヘルプ（開閉状態を記憶） */}
+        {/* ヘルプ */}
         <div style={s.help}>
           <div style={s.helpHeader} onClick={toggleHelp}>
             <span style={s.helpTitle}>📋 インポート手順（クリックで{helpOpen ? "閉じる" : "開く"}）</span>
@@ -139,12 +166,14 @@ export default function ImportScreen() {
           )}
         </div>
 
+        {/* テキスト入力 */}
         <div style={s.section}>
           <label style={s.label}>テキストを貼り付け<span style={s.sublabel}>（Cmd+V で直接ペースト）</span></label>
           <textarea ref={textareaRef} style={s.textarea} value={rawText} onChange={e => setRawText(e.target.value)}
             placeholder={"- ルートノード\n  - 子ノード1\n    - 孫ノード\n  - 子ノード2"} autoFocus />
         </div>
 
+        {/* プレビュー */}
         {preview && (
           <div style={s.section}>
             <div style={s.nodeCount(preview.nodeCount)}>
@@ -152,23 +181,38 @@ export default function ImportScreen() {
                 ? `⚠️ ${preview.nodeCount.toLocaleString()}ノード（非常に大きいマップです）`
                 : `全 ${preview.nodeCount.toLocaleString()} ノードを取り込みます`}
             </div>
-            {preview.errors.length > 0 && (
-              <div style={s.errorBox}>{preview.errors.map((e, i) => <div key={i}>⚠️ {e}</div>)}</div>
-            )}
+            {preview.errors.length > 0 && <div style={s.errorBox}>{preview.errors.map((e, i) => <div key={i}>⚠️ {e}</div>)}</div>}
             <div style={s.previewBox}>{preview.previewText}</div>
           </div>
         )}
 
+        {/* タイトル */}
         <div style={s.section}>
           <label style={s.label}>マップタイトル<span style={s.sublabel}>（自動入力済み・編集可能）</span></label>
           <input style={s.input} value={title} onChange={handleTitleChange} placeholder="マップのタイトルを入力" />
         </div>
 
+        {/* 保存先フォルダ */}
+        <div style={s.section}>
+          <label style={s.label}>
+            保存先フォルダ
+            <span style={s.sublabel}>（連続インポート時は前回の選択を引き継ぎます）</span>
+          </label>
+          <select style={s.select} value={selectedFolderId ?? ""} onChange={handleFolderChange}>
+            <option value="">🏠 ルート（フォルダなし）</option>
+            {folders.map(f => (
+              <option key={f.id} value={f.id}>📁 {f.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* メモ */}
         <div style={s.section}>
           <label style={s.label}>メモ<span style={s.sublabel}>（任意）「Whimsical の○○フォルダから」など</span></label>
           <input style={s.input} value={note} onChange={e => setNote(e.target.value)} placeholder="例：Whimsical の「戦略」フォルダから" />
         </div>
 
+        {/* ボタン */}
         <div style={s.btnRow}>
           <button style={s.clearBtn} onClick={resetForm}>クリア</button>
           <button style={s.importBtn(canImport)} onClick={handleImport} disabled={!canImport}>
@@ -178,15 +222,9 @@ export default function ImportScreen() {
       </div>
 
       {toast && (
-        <div style={{
-          position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)",
-          background: toast.type === "success" ? "rgba(22,163,74,0.92)" : "rgba(220,38,38,0.92)",
-          color: "#fff", borderRadius: 10, padding: "10px 22px",
-          fontSize: 14, fontWeight: 600, zIndex: 9999,
-          boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
-          fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif",
-          pointerEvents: "none",
-        }}>{toast.msg}</div>
+        <div style={{ position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)", background: toast.type === "success" ? "rgba(22,163,74,0.92)" : "rgba(220,38,38,0.92)", color: "#fff", borderRadius: 10, padding: "10px 22px", fontSize: 14, fontWeight: 600, zIndex: 9999, pointerEvents: "none", fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif" }}>
+          {toast.msg}
+        </div>
       )}
     </div>
   );
