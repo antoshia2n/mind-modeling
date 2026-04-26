@@ -6,6 +6,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { createNode, updateNode, deleteNode } from "../lib/supabase.js";
 import { calcLayout } from "../lib/layout.js";
+import { navigate } from "../lib/navigate.js";
 import MmNode from "./MmNode.jsx";
 
 const nodeTypes = { mmNode: MmNode };
@@ -14,20 +15,14 @@ const DEBOUNCE_MS = 800;
 
 function getDescendantIds(nodeId, nodes) {
   const result = [];
-  for (const n of nodes) {
-    if (n.parent_id === nodeId) { result.push(n.id); result.push(...getDescendantIds(n.id, nodes)); }
-  }
+  for (const n of nodes) { if (n.parent_id === nodeId) { result.push(n.id); result.push(...getDescendantIds(n.id, nodes)); } }
   return result;
 }
-
 function getHiddenIds(nodes) {
   const hidden = new Set();
-  for (const n of nodes) {
-    if (n.collapsed) for (const id of getDescendantIds(n.id, nodes)) hidden.add(id);
-  }
+  for (const n of nodes) { if (n.collapsed) for (const id of getDescendantIds(n.id, nodes)) hidden.add(id); }
   return hidden;
 }
-
 function findDropTarget(dragged, allRfNodes) {
   const dw = dragged.measured?.width ?? 120, dh = dragged.measured?.height ?? 32;
   const cx = dragged.position.x + dw / 2, cy = dragged.position.y + dh / 2;
@@ -38,23 +33,20 @@ function findDropTarget(dragged, allRfNodes) {
   }
   return null;
 }
-
 function collectSubtree(nodeId, nodes) {
   const result = [];
   function dfs(id, parentIdx) {
     const node = nodes.find(n => n.id === id);
     if (!node) return;
     const myIdx = result.length;
-    result.push({ content: node.content ?? "", parentIdx,
-      bold: node.bold ?? false, italic: node.italic ?? false, strikethrough: node.strikethrough ?? false,
-      text_color: node.text_color ?? null, node_color: node.node_color ?? null });
+    result.push({ content: node.content ?? "", parentIdx, bold: node.bold ?? false, italic: node.italic ?? false, strikethrough: node.strikethrough ?? false, text_color: node.text_color ?? null, node_color: node.node_color ?? null });
     nodes.filter(n => n.parent_id === id).sort((a, b) => a.order_index - b.order_index).forEach(c => dfs(c.id, myIdx));
   }
   dfs(nodeId, -1);
   return result;
 }
 
-export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesChange, onSaved }) {
+export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesChange, onSaved, onRequestTemplateInsert, onRequestMapLink }) {
   const saveTimers = useRef({});
   const [rfNodes, setRfNodes, onRfNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges, onRfEdgesChange] = useEdgesState([]);
@@ -72,17 +64,14 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
   }, [nodes, onNodesChange, onSaved]);
 
   const addSibling = useCallback(async (nodeId, position = "after") => {
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node) return;
+    const node = nodes.find(n => n.id === nodeId); if (!node) return;
     const siblings = nodes.filter(n => n.parent_id === node.parent_id && n.map_id === mapId).sort((a, b) => a.order_index - b.order_index);
     const ci = siblings.findIndex(n => n.id === nodeId);
     let newOrder;
     if (position === "after") {
-      newOrder = ci === siblings.length - 1 ? (siblings[ci]?.order_index ?? 0) + 1024
-        : siblings[ci].order_index + Math.max(1, Math.floor((siblings[ci + 1].order_index - siblings[ci].order_index) / 2));
+      newOrder = ci === siblings.length - 1 ? (siblings[ci]?.order_index ?? 0) + 1024 : siblings[ci].order_index + Math.max(1, Math.floor((siblings[ci + 1].order_index - siblings[ci].order_index) / 2));
     } else {
-      newOrder = ci === 0 ? Math.max(1, siblings[0].order_index - 512)
-        : siblings[ci - 1].order_index + Math.max(1, Math.floor((siblings[ci].order_index - siblings[ci - 1].order_index) / 2));
+      newOrder = ci === 0 ? Math.max(1, siblings[0].order_index - 512) : siblings[ci - 1].order_index + Math.max(1, Math.floor((siblings[ci].order_index - siblings[ci - 1].order_index) / 2));
     }
     const newNode = await createNode(uid, mapId, node.parent_id, newOrder, "");
     if (!newNode) return;
@@ -107,23 +96,18 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
   }, [nodes, onNodesChange, onSaved]);
 
   const toggleCollapse = useCallback(async (nodeId) => {
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node) return;
+    const node = nodes.find(n => n.id === nodeId); if (!node) return;
     const v = !node.collapsed;
     await updateNode(nodeId, { collapsed: v });
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, collapsed: v } : n)); onSaved();
   }, [nodes, onNodesChange, onSaved]);
 
   const moveSelection = useCallback((nodeId, direction) => {
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node) return;
+    const node = nodes.find(n => n.id === nodeId); if (!node) return;
     const hiddenIds = getHiddenIds(nodes);
-    if (direction === "right") {
-      const ch = nodes.filter(n => n.parent_id === nodeId && !hiddenIds.has(n.id)).sort((a, b) => a.order_index - b.order_index);
-      if (ch.length > 0) setSelectedId(ch[0].id);
-    } else if (direction === "left") {
-      if (node.parent_id) setSelectedId(node.parent_id);
-    } else {
+    if (direction === "right") { const ch = nodes.filter(n => n.parent_id === nodeId && !hiddenIds.has(n.id)).sort((a, b) => a.order_index - b.order_index); if (ch.length > 0) setSelectedId(ch[0].id); }
+    else if (direction === "left") { if (node.parent_id) setSelectedId(node.parent_id); }
+    else {
       const siblings = nodes.filter(n => n.parent_id === node.parent_id && !hiddenIds.has(n.id)).sort((a, b) => a.order_index - b.order_index);
       const ci = siblings.findIndex(n => n.id === nodeId);
       if (direction === "up"   && ci > 0)                   setSelectedId(siblings[ci - 1].id);
@@ -132,8 +116,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
   }, [nodes]);
 
   const toggleFormat = useCallback(async (nodeId, field) => {
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node) return;
+    const node = nodes.find(n => n.id === nodeId); if (!node) return;
     const v = !node[field];
     await updateNode(nodeId, { [field]: v });
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, [field]: v } : n)); onSaved();
@@ -161,8 +144,8 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       const actualParentId = parentIdx === -1 ? parentId : idMap[parentIdx];
       const current = [...nodes, ...newNodes];
       const siblings = current.filter(n => n.parent_id === actualParentId);
-      const newOrder  = siblings.length > 0 ? Math.max(...siblings.map(n => n.order_index)) + 1024 : 1024;
-      const newNode   = await createNode(uid, mapId, actualParentId, newOrder, content, { bold, italic, strikethrough, text_color, node_color });
+      const newOrder = siblings.length > 0 ? Math.max(...siblings.map(n => n.order_index)) + 1024 : 1024;
+      const newNode  = await createNode(uid, mapId, actualParentId, newOrder, content, { bold, italic, strikethrough, text_color, node_color });
       if (!newNode) continue;
       idMap[i] = newNode.id; newNodes.push(newNode);
     }
@@ -179,7 +162,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       if (selectedId) {
         if (e.key === "c" && mod && !e.shiftKey) { e.preventDefault(); copySubtree(selectedId); return; }
         if (e.key === "v" && mod && !e.shiftKey) { e.preventDefault(); pasteSubtree(selectedId); return; }
-        if (e.key === "b" && mod) { e.preventDefault(); toggleFormat(selectedId, "bold");   return; }
+        if (e.key === "b" && mod) { e.preventDefault(); toggleFormat(selectedId, "bold"); return; }
         if (e.key === "i" && mod) { e.preventDefault(); toggleFormat(selectedId, "italic"); return; }
         if (e.key === "Enter" && !mod && !e.shiftKey) { e.preventDefault(); addSibling(selectedId, "after");  return; }
         if (e.key === "Enter" && mod  && !e.shiftKey) { e.preventDefault(); addSibling(selectedId, "before"); return; }
@@ -204,30 +187,23 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     const rootIds   = new Set(nodes.filter(n => !n.parent_id).map(n => n.id));
 
     setRfNodes(nodes.map(n => {
-      const dir     = directions[n.id] ?? "right";
-      const isLeft  = dir === "left";
-      const isRoot  = rootIds.has(n.id);
-      // 子の中に左/右それぞれがいるか（ルートノード用）
-      const hasRightChildren = isRoot && nodes.some(c => c.parent_id === n.id && directions[c.id] === "right");
-      const hasLeftChildren  = isRoot && nodes.some(c => c.parent_id === n.id && directions[c.id] === "left");
-
+      const dir    = directions[n.id] ?? "right";
+      const isLeft = dir === "left";
+      const isRoot = rootIds.has(n.id);
       return {
-        id:       n.id,
-        position: positions[n.id] ?? { x: 0, y: 0 },
-        type:     "mmNode",
-        hidden:   hiddenIds.has(n.id),
-        selected: n.id === selectedId,
-        // react-flow がこのノードの Handle 方向を決定する
+        id: n.id, position: positions[n.id] ?? { x: 0, y: 0 },
+        type: "mmNode", hidden: hiddenIds.has(n.id), selected: n.id === selectedId,
         sourcePosition: isLeft ? Position.Left  : Position.Right,
         targetPosition: isLeft ? Position.Right : Position.Left,
         data: {
           label: n.content ?? "", collapsed: n.collapsed,
           hasChildren: nodes.some(c => c.parent_id === n.id),
-          hasRightChildren, hasLeftChildren,
-          isRoot, direction: dir,
-          forceEdit: n.id === forceEditId,
+          hasRightChildren: isRoot && nodes.some(c => c.parent_id === n.id && directions[c.id] === "right"),
+          hasLeftChildren:  isRoot && nodes.some(c => c.parent_id === n.id && directions[c.id] === "left"),
+          isRoot, direction: dir, forceEdit: n.id === forceEditId,
           bold: n.bold, italic: n.italic, strikethrough: n.strikethrough,
           textColor: n.text_color, nodeColor: n.node_color,
+          linkedMapId: n.linked_map_id ?? null,
           onContentChange:       (v) => handleContentChange(n.id, v),
           onToggleCollapse:      ()  => toggleCollapse(n.id),
           onAddChild:            ()  => addChild(n.id),
@@ -238,6 +214,9 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
           onToggleStrikethrough: ()  => toggleFormat(n.id, "strikethrough"),
           onTextColorChange:     (c) => setColor(n.id, "text_color", c),
           onNodeColorChange:     (c) => setColor(n.id, "node_color", c),
+          onInsertTemplate:      ()  => onRequestTemplateInsert?.(n.id),
+          onMapLink:             ()  => onRequestMapLink?.(n.id, n.linked_map_id),
+          onNavigateLink:        ()  => { if (n.linked_map_id) navigate(`/m/${n.linked_map_id}`); },
           onEditStart: () => { setEditingId(n.id); setForceEditId(null); },
           onEditEnd:   () => setEditingId(null),
         },
@@ -246,29 +225,15 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
 
     setRfEdges(nodes.filter(n => n.parent_id).map(n => {
       const isLeft = (directions[n.id] ?? "right") === "left";
-      return {
-        id:           `e-${n.parent_id}-${n.id}`,
-        source:       n.parent_id,
-        target:       n.id,
-        // 左展開: 親の left-source → 子の right-target
-        // 右展開: 親の right-source → 子の left-target
-        sourceHandle: isLeft ? "sl" : "sr",
-        targetHandle: isLeft ? "tr" : "tl",
-        type:         "smoothstep",
-        style:        EDGE_STYLE,
-        hidden:       hiddenIds.has(n.id),
-      };
+      return { id: `e-${n.parent_id}-${n.id}`, source: n.parent_id, target: n.id, sourceHandle: isLeft ? "sl" : "sr", targetHandle: isLeft ? "tr" : "tl", type: "smoothstep", style: EDGE_STYLE, hidden: hiddenIds.has(n.id) };
     }));
-  }, [nodes, selectedId, forceEditId, layoutMode, handleContentChange, toggleCollapse, addChild, addSibling, toggleFormat, setColor]);
+  }, [nodes, selectedId, forceEditId, layoutMode, handleContentChange, toggleCollapse, addChild, addSibling, toggleFormat, setColor, onRequestTemplateInsert, onRequestMapLink]);
 
   const handleNodeDragStop = useCallback(async (event, node, allRfNodes) => {
     const target = findDropTarget(node, allRfNodes);
     if (target) {
       const descendants = getDescendantIds(node.id, nodes);
-      if (descendants.includes(target.id) || target.id === node.id) {
-        const { positions } = calcLayout(nodes, layoutMode);
-        setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position }))); return;
-      }
+      if (descendants.includes(target.id) || target.id === node.id) { const { positions } = calcLayout(nodes, layoutMode); setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position }))); return; }
       const newSiblings = nodes.filter(n => n.parent_id === target.id);
       const newOrder    = newSiblings.length > 0 ? Math.max(...newSiblings.map(n => n.order_index)) + 1024 : 1024;
       await updateNode(node.id, { parent_id: target.id, order_index: newOrder, x: null, y: null });
@@ -280,37 +245,24 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     }
   }, [nodes, layoutMode, onNodesChange, onSaved, setRfNodes]);
 
-  const handleNodeClick = useCallback((e, node) => { setSelectedId(node.id); setForceEditId(null); }, []);
-  const handlePaneClick = useCallback(() => { if (!editingId) { setSelectedId(null); setForceEditId(null); } }, [editingId]);
+  const handleNodeClick  = useCallback((e, node) => { setSelectedId(node.id); setForceEditId(null); }, []);
+  const handlePaneClick  = useCallback(() => { if (!editingId) { setSelectedId(null); setForceEditId(null); } }, [editingId]);
 
   return (
     <div style={{ width: "100%", height: "calc(100vh - 53px)", position: "relative" }}>
-      <ReactFlow
-        key={layoutMode}
-        nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes}
+      <ReactFlow key={layoutMode} nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes}
         onNodesChange={onRfNodesChange} onEdgesChange={onRfEdgesChange}
         onNodeDragStop={handleNodeDragStop} onNodeClick={handleNodeClick} onPaneClick={handlePaneClick}
         nodesDraggable={true} nodesConnectable={false} elementsSelectable={true}
-        deleteKeyCode={null} selectionKeyCode={null}
-        panOnScroll={true} panOnDrag={false}
-        fitView fitViewOptions={{ padding: 0.35 }} minZoom={0.2} maxZoom={2}
-        style={{ background: "#eef0f6" }}
-      >
+        deleteKeyCode={null} selectionKeyCode={null} panOnScroll={true} panOnDrag={false}
+        fitView fitViewOptions={{ padding: 0.35 }} minZoom={0.2} maxZoom={2} style={{ background: "#eef0f6" }}>
         <Background variant={BackgroundVariant.Dots} color="#c7cade" gap={22} size={1.5} />
         <Controls showInteractive={false} />
       </ReactFlow>
-      {toastMsg && (
-        <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)",
-          background: "rgba(30,30,40,0.85)", color: "#fff", borderRadius: 8,
-          padding: "8px 18px", fontSize: 13, pointerEvents: "none" }}>{toastMsg}</div>
-      )}
-      <div style={{ position: "absolute", bottom: 16, right: 16,
-        background: "rgba(255,255,255,0.92)", border: "1px solid #e2e8f0",
-        borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#94a3b8",
-        lineHeight: 1.9, pointerEvents: "none" }}>
-        <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟追加 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加</div>
-        <div><b style={{color:"#6b7280"}}>⌘B</b> 太字 ・ <b style={{color:"#6b7280"}}>⌘I</b> 斜体</div>
-        <div><b style={{color:"#6b7280"}}>⌘C/V</b> サブツリーコピペ ・ <b style={{color:"#6b7280"}}>Del</b> 削除</div>
+      {toastMsg && <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", background: "rgba(30,30,40,0.85)", color: "#fff", borderRadius: 8, padding: "8px 18px", fontSize: 13, pointerEvents: "none" }}>{toastMsg}</div>}
+      <div style={{ position: "absolute", bottom: 16, right: 16, background: "rgba(255,255,255,0.92)", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#94a3b8", lineHeight: 1.9, pointerEvents: "none" }}>
+        <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟 ・ <b style={{color:"#6b7280"}}>Tab</b> 子 ・ <b style={{color:"#6b7280"}}>⊕</b> テンプレ挿入 ・ <b style={{color:"#6b7280"}}>🔗</b> マップリンク</div>
+        <div><b style={{color:"#6b7280"}}>⌘B/I</b> 書式 ・ <b style={{color:"#6b7280"}}>⌘C/V</b> コピペ ・ <b style={{color:"#6b7280"}}>Del</b> 削除</div>
         <div>スクロールでパン ・ ダブルクリックで編集</div>
       </div>
     </div>

@@ -1,22 +1,20 @@
 import { useState, useEffect } from "react";
 import { AuthGuard } from "shia2n-core";
-import Home          from "./screens/Home.jsx";
-import Edit          from "./screens/Edit.jsx";
-import ShareView     from "./screens/ShareView.jsx";
-import ShareManage   from "./screens/ShareManage.jsx";
-import ImportScreen  from "./screens/ImportScreen.jsx";
-import ImportHistory from "./screens/ImportHistory.jsx";
+import Home           from "./screens/Home.jsx";
+import Edit           from "./screens/Edit.jsx";
+import ShareView      from "./screens/ShareView.jsx";
+import ShareManage    from "./screens/ShareManage.jsx";
+import ImportScreen   from "./screens/ImportScreen.jsx";
+import ImportHistory  from "./screens/ImportHistory.jsx";
+import TemplateList   from "./screens/TemplateList.jsx";
 
 function parsePath() {
   const p = window.location.pathname;
 
-  // /share/:token（AuthGuard 不要）
   if (p.startsWith("/share/")) {
     const token = p.slice(7).replace(/\/$/, "");
     if (token) return { screen: "share", token };
   }
-
-  // /m/:mapId/share（共有管理）
   if (p.startsWith("/m/")) {
     const rest = p.slice(3).replace(/\/$/, "");
     if (rest.endsWith("/share")) {
@@ -25,12 +23,9 @@ function parsePath() {
     }
     if (rest) return { screen: "edit", mapId: rest };
   }
-
-  // /import-history（履歴）
   if (p === "/import-history") return { screen: "import-history" };
-
-  // /import（インポート）
-  if (p === "/import") return { screen: "import" };
+  if (p === "/import")         return { screen: "import" };
+  if (p === "/templates")      return { screen: "templates" };
 
   return { screen: "home" };
 }
@@ -48,15 +43,15 @@ export default function App() {
     };
   }, []);
 
-  // 公開ビューは AuthGuard の外
   if (route.screen === "share") return <ShareView token={route.token} />;
 
   return (
     <AuthGuard appId="mm">
-      {route.screen === "share-manage"  ? <ShareManage   mapId={route.mapId} /> :
-       route.screen === "edit"          ? <Edit           mapId={route.mapId} /> :
-       route.screen === "import"        ? <ImportScreen   /> :
-       route.screen === "import-history"? <ImportHistory  /> :
+      {route.screen === "share-manage"   ? <ShareManage   mapId={route.mapId} /> :
+       route.screen === "edit"           ? <Edit           mapId={route.mapId} /> :
+       route.screen === "import"         ? <ImportScreen   /> :
+       route.screen === "import-history" ? <ImportHistory  /> :
+       route.screen === "templates"      ? <TemplateList   /> :
        <Home />}
     </AuthGuard>
   );
