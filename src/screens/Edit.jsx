@@ -7,6 +7,7 @@ import MapMode  from "./MapMode.jsx";
 
 const BORDER = "#e2e8f0";
 const ACCENT = "#3b82f6";
+const PURPLE = "#a855f7";
 
 export default function Edit({ mapId }) {
   const uid = useAuthUid();
@@ -30,21 +31,13 @@ export default function Edit({ mapId }) {
     });
   }, [uid, mapId]);
 
-  function handleTitleChange(e) {
-    setMap(prev => ({ ...prev, title: e.target.value }));
-  }
-
+  function handleTitleChange(e) { setMap(prev => ({ ...prev, title: e.target.value })); }
   async function handleTitleBlur(e) {
     setSaveState("saving");
     await updateMap(mapId, { title: e.target.value });
     setSaveState("saved");
   }
-
-  function handleNodesChange(newNodes) {
-    setNodes(newNodes);
-    setSaveState("saving");
-  }
-
+  function handleNodesChange(newNodes) { setNodes(newNodes); setSaveState("saving"); }
   function handleSaved() { setSaveState("saved"); }
 
   const s = {
@@ -58,31 +51,21 @@ export default function Edit({ mapId }) {
       display: "flex", alignItems: "center", gap: 14,
       flexShrink: 0, height: 53, boxSizing: "border-box",
     },
-    backBtn: {
-      background: "none", border: "none", color: T.muted,
-      cursor: "pointer", fontSize: 14, padding: 0, whiteSpace: "nowrap",
-    },
-    titleInput: {
-      flex: 1, background: "none", border: "none",
-      fontSize: 17, fontWeight: 700, color: T.fg,
-      outline: "none", fontFamily: "inherit", minWidth: 0,
-    },
-    modeToggle: {
-      display: "flex", border: `1px solid ${BORDER}`,
-      borderRadius: 8, overflow: "hidden", flexShrink: 0,
-    },
+    backBtn: { background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14, padding: 0, whiteSpace: "nowrap" },
+    titleInput: { flex: 1, background: "none", border: "none", fontSize: 17, fontWeight: 700, color: T.fg, outline: "none", fontFamily: "inherit", minWidth: 0 },
+    modeToggle: { display: "flex", border: `1px solid ${BORDER}`, borderRadius: 8, overflow: "hidden", flexShrink: 0 },
     modeBtn: (active) => ({
-      background: active ? ACCENT : "none",
-      color: active ? "#fff" : T.muted,
-      border: "none", padding: "6px 14px", fontSize: 13,
-      fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
+      background: active ? ACCENT : "none", color: active ? "#fff" : T.muted,
+      border: "none", padding: "6px 14px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
     }),
+    shareBtn: {
+      background: "none", border: `1px solid ${PURPLE}`,
+      borderRadius: 8, padding: "6px 14px", fontSize: 13, fontWeight: 500,
+      color: PURPLE, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap",
+    },
     saveLabel: { fontSize: 12, color: T.muted, flexShrink: 0, whiteSpace: "nowrap" },
     body: { flex: 1, overflow: mode === "map" ? "hidden" : "auto" },
-    center: {
-      display: "flex", alignItems: "center", justifyContent: "center",
-      minHeight: "100vh", background: T.bg,
-    },
+    center: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: T.bg },
   };
 
   if (loading) return <div style={s.center}><span style={{ color: T.muted }}>読み込み中...</span></div>;
@@ -99,6 +82,7 @@ export default function Edit({ mapId }) {
           onBlur={handleTitleBlur}
           placeholder="タイトル"
         />
+        <button style={s.shareBtn} onClick={() => navigate(`/m/${mapId}/share`)}>共有</button>
         <div style={s.modeToggle}>
           <button style={s.modeBtn(mode === "list")} onClick={() => setMode("list")}>リスト</button>
           <button style={s.modeBtn(mode === "map")}  onClick={() => setMode("map")}>マップ</button>
