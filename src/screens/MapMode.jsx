@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import {
   ReactFlow, Background, Controls, BackgroundVariant,
-  useNodesState, useEdgesState, Position,
+  useNodesState, useEdgesState, Position, useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { createNode, updateNode, deleteNode } from "../lib/supabase.js";
@@ -52,6 +52,7 @@ function collectSubtree(nodeId, nodes) {
 }
 
 export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesChange, onSaved, onRequestTemplateInsert, onRequestMapLink }) {
+  const { getNodes } = useReactFlow();
   const saveTimers = useRef({});
   const [rfNodes, setRfNodes, onRfNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges, onRfEdgesChange] = useEdgesState([]);
@@ -306,22 +307,20 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
 
   // ─── ドラッグ中：ドロップ先候補をハイライト ─────────────────
 
-  const handleNodeDrag = useCallback((event, draggedNode, allRfNodes) => {
-    // ドラッグ中のノード群（マルチセレクトを含む）
+  const handleNodeDrag = useCallback((event, draggedNode) => {
+    const allRfNodes = getNodes();
     const draggingIds = selectedIds.size > 1 ? selectedIds : new Set([draggedNode.id]);
     const target = findDropTarget(draggedNode, allRfNodes, draggingIds);
-    // 自分の子孫はドロップ先にできない
     const descendants = new Set(getDescendantIds(draggedNode.id, nodes));
     const validTarget = target && !descendants.has(target.id) ? target.id : null;
     if (validTarget !== dropTargetId) setDropTargetId(validTarget);
-  }, [selectedIds, nodes, dropTargetId]);
+  }, [getNodes, selectedIds, nodes, dropTargetId]);
 
   // ─── ドラッグ終了：ドロップ先に移動 ──────────────────────────
 
-  const handleNodeDragStop = useCallback(async (event, draggedNode, allRfNodes) => {
+  const handleNodeDragStop = useCallback(async (event, draggedNode) => {
     setDropTargetId(null);
-
-    // ドラッグした全ノードのセット
+    const allRfNodes = getNodes();
     const draggingIds = selectedIds.size > 1 ? selectedIds : new Set([draggedNode.id]);
     const target = findDropTarget(draggedNode, allRfNodes, draggingIds);
 
@@ -368,7 +367,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
 
     onNodesChange(updatedNodes); onSaved();
     if (toMove.length > 0) showToast(`${toMove.length}ノードを移動しました`);
-  }, [selectedIds, nodes, layoutMode, onNodesChange, onSaved, setRfNodes]);
+  }, [getNodes, selectedIds, nodes, layoutMode, onNodesChange, onSaved, setRfNodes]);
 
   // ─── クリック / 選択変更 ─────────────────────────────────────
 

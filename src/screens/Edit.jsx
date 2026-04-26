@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useAuthUid, T } from "shia2n-core";
 import { getMap, getNodes, getMaps, updateMap, createNode } from "../lib/supabase.js";
 import { navigate } from "../lib/navigate.js";
+import { ReactFlowProvider } from "@xyflow/react";
 import ListMode from "./ListMode.jsx";
 import MapMode  from "./MapMode.jsx";
 import SaveTemplateModal    from "./SaveTemplateModal.jsx";
@@ -156,13 +157,14 @@ export default function Edit({ mapId }) {
         {mode === "list" ? (
           <ListMode uid={uid} mapId={mapId} nodes={nodes} onNodesChange={handleNodesChange} onSaved={handleSaved} />
         ) : (
-          <MapMode
-            uid={uid} mapId={mapId} nodes={nodes} layoutMode={layoutMode}
-            onNodesChange={handleNodesChange} onSaved={handleSaved}
-            onRequestTemplateInsert={handleRequestTemplateInsert}
-            onRequestMapLink={handleRequestMapLink}
-            allMaps={allMaps}
-          />
+          <ReactFlowProvider>
+            <MapMode
+              uid={uid} mapId={mapId} nodes={nodes} layoutMode={layoutMode}
+              onNodesChange={handleNodesChange} onSaved={handleSaved}
+              onRequestTemplateInsert={handleRequestTemplateInsert}
+              onRequestMapLink={handleRequestMapLink}
+            />
+          </ReactFlowProvider>
         )}
       </div>
 
