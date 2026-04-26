@@ -14,14 +14,14 @@ const MAX_WARN_NODES = 10000;
 export default function ImportScreen() {
   const uid = useAuthUid();
 
-  const [rawText,    setRawText]    = useState("");
-  const [title,      setTitle]      = useState("");
-  const [note,       setNote]       = useState("");
-  const [preview,    setPreview]    = useState(null);  // { items, errors, nodeCount, previewText }
-  const [importing,  setImporting]  = useState(false);
-  const [helpOpen,   setHelpOpen]   = useState(true);
-  const [toast,      setToast]      = useState(null);
-  const [titleEdited, setTitleEdited] = useState(false); // ユーザーが手動でタイトルを編集したか
+  const [rawText,     setRawText]     = useState("");
+  const [title,       setTitle]       = useState("");
+  const [note,        setNote]        = useState("");
+  const [preview,     setPreview]     = useState(null);
+  const [importing,   setImporting]   = useState(false);
+  const [helpOpen,    setHelpOpen]    = useState(true);
+  const [toast,       setToast]       = useState(null);
+  const [titleEdited, setTitleEdited] = useState(false);
 
   const textareaRef = useRef(null);
 
@@ -33,15 +33,10 @@ export default function ImportScreen() {
       return;
     }
     const { items, errors } = parseIndentedText(rawText);
-    const nodeCount  = countNodes(items);
+    const nodeCount   = countNodes(items);
     const previewText = formatPreview(items, 60);
     setPreview({ items, errors, nodeCount, previewText });
-
-    // タイトルを自動推測（ユーザーが手動編集していない場合のみ）
-    if (!titleEdited) {
-      const guessed = guessTitle(items);
-      setTitle(guessed);
-    }
+    if (!titleEdited) setTitle(guessTitle(items));
   }, [rawText, titleEdited]);
 
   function handleTitleChange(e) {
@@ -49,7 +44,20 @@ export default function ImportScreen() {
     setTitleEdited(true);
   }
 
-  // インポート実行
+  function showToast(msg, type = "success") {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  }
+
+  function resetForm() {
+    setRawText("");
+    setTitle("");
+    setNote("");
+    setPreview(null);
+    setTitleEdited(false);
+    setTimeout(() => textareaRef.current?.focus(), 80);
+  }
+
   const handleImport = useCallback(async () => {
     if (!rawText.trim() || !title.trim() || importing) return;
     if (preview?.nodeCount > MAX_WARN_NODES) {
@@ -57,8 +65,11 @@ export default function ImportScreen() {
     }
 
     setImporting(true);
+
+    // ─── fetch + エラーハンドリングを段階的に分離 ──────────────
+    let res;
     try {
-      const res = await fetch("/api/internal/import-text-to-map", {
+      res = await fetch("/api/internal/import-text-to-map", {
         method: "POST",
         headers: {
           "Content-Type":  "application/json",
@@ -71,41 +82,43 @@ export default function ImportScreen() {
           source_note:   note.trim() || null,
         }),
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        showToast(data.message || "インポートに失敗しました。", "error");
-        return;
-      }
-
-      // 完了トースト
-      showToast(`✓ インポート完了（${data.node_count}ノード）`, "success");
-
-      // 画面をリセットして連続インポート可能にする（ページ遷移しない）
-      setTimeout(() => {
-        setRawText("");
-        setTitle("");
-        setNote("");
-        setPreview(null);
-        setTitleEdited(false);
-        // テキストエリアにフォーカスを戻す（すぐに次を Cmd+V できる）
-        setTimeout(() => textareaRef.current?.focus(), 50);
-      }, 800);
-
-    } catch (e) {
-      showToast("ネットワークエラーが発生しました。", "error");
-    } finally {
+    } catch (networkErr) {
+      // fetch 自体が失敗（オフライン・CORS など）
+      showToast("ネットワークに接続できません。", "error");
       setImporting(false);
+      return;
     }
+
+    // ─── レスポンスの JSON パース（別 try-catch で分離） ───────
+    let data;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      // JSON パース失敗（API が HTML エラーページを返した場合など）
+      showToast(`サーバーエラーが発生しました（HTTP ${res.status}）。`, "error");
+      setImporting(false);
+      return;
+    }
+
+    // ─── API レスポンスの成否判定 ──────────────────────────────
+    if (!res.ok) {
+      const msg = data?.message || data?.error || `インポートに失敗しました（HTTP ${res.status}）`;
+      showToast(msg, "error");
+      setImporting(false);
+      return;
+    }
+
+    // ─── 成功 ─────────────────────────────────────────────────
+    const nodeCount = data.node_count ?? preview?.nodeCount ?? 0;
+    showToast(`✓ インポート完了（${nodeCount}ノード）`, "success");
+    setImporting(false);
+
+    // 800ms後にリセット（トーストを見てからすぐ次を貼れる）
+    setTimeout(resetForm, 800);
+
   }, [rawText, title, note, uid, preview, importing]);
 
-  function showToast(msg, type = "success") {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
-  }
-
-  const canImport = rawText.trim() && title.trim() && preview?.nodeCount > 0 && !importing;
+  const canImport = rawText.trim() && title.trim() && (preview?.nodeCount ?? 0) > 0 && !importing;
 
   const s = {
     wrap: {
@@ -126,23 +139,11 @@ export default function ImportScreen() {
       color: T.muted, cursor: "pointer", whiteSpace: "nowrap",
     },
     body: { flex: 1, padding: "24px 32px", maxWidth: 860, margin: "0 auto", width: "100%", boxSizing: "border-box" },
-    help: {
-      background: "#f0f9ff", border: "1px solid #bae6fd",
-      borderRadius: 10, marginBottom: 24, overflow: "hidden",
-    },
-    helpHeader: {
-      display: "flex", alignItems: "center", justifyContent: "space-between",
-      padding: "10px 16px", cursor: "pointer", userSelect: "none",
-    },
+    help: { background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, marginBottom: 24, overflow: "hidden" },
+    helpHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", cursor: "pointer", userSelect: "none" },
     helpTitle: { fontSize: 13, fontWeight: 700, color: "#0369a1" },
-    helpContent: {
-      padding: "0 16px 14px", fontSize: 13, color: "#0369a1", lineHeight: 1.9,
-    },
-    helpCode: {
-      background: "#e0f2fe", borderRadius: 6, padding: "8px 12px",
-      fontFamily: "'DM Mono','JetBrains Mono',monospace",
-      fontSize: 12, marginTop: 8, lineHeight: 1.7,
-    },
+    helpContent: { padding: "0 16px 14px", fontSize: 13, color: "#0369a1", lineHeight: 1.9 },
+    helpCode: { background: "#e0f2fe", borderRadius: 6, padding: "8px 12px", fontFamily: "'DM Mono','JetBrains Mono',monospace", fontSize: 12, marginTop: 8, lineHeight: 1.7 },
     section: { marginBottom: 20 },
     label: { fontSize: 13, fontWeight: 600, color: T.fg, marginBottom: 8, display: "block" },
     sublabel: { fontSize: 12, color: T.muted, marginLeft: 8, fontWeight: 400 },
@@ -155,16 +156,14 @@ export default function ImportScreen() {
       outline: "none", lineHeight: 1.6,
     },
     previewBox: {
-      background: "#f8fafc", border: `1px solid ${BORDER}`,
-      borderRadius: 8, padding: "12px 14px",
-      fontFamily: "'DM Mono','JetBrains Mono',monospace",
+      background: "#f8fafc", border: `1px solid ${BORDER}`, borderRadius: 8,
+      padding: "12px 14px", fontFamily: "'DM Mono','JetBrains Mono',monospace",
       fontSize: 12, lineHeight: 1.7, color: "#374151",
       whiteSpace: "pre", overflowX: "auto", maxHeight: 240, overflowY: "auto",
     },
     nodeCount: (n) => ({
-      fontSize: 13, fontWeight: 600,
+      fontSize: 13, fontWeight: 600, marginBottom: 8,
       color: n > MAX_WARN_NODES ? DANGER : (n > 500 ? WARNING : ACCENT),
-      marginBottom: 8,
     }),
     errorBox: {
       background: "#fef2f2", border: "1px solid #fecaca",
@@ -185,10 +184,10 @@ export default function ImportScreen() {
     },
     importBtn: (can) => ({
       background: can ? PURPLE : "#e2e8f0",
-      color:      can ? "#fff" : "#94a3b8",
+      color: can ? "#fff" : "#94a3b8",
       border: "none", borderRadius: 8, padding: "10px 24px",
       fontSize: 14, fontWeight: 700, cursor: can ? "pointer" : "default",
-      transition: "all 0.15s", flex: 1,
+      flex: 1,
     }),
   };
 
@@ -215,9 +214,7 @@ export default function ImportScreen() {
               <div>3. <b>Cmd+C</b>（Windows: Ctrl+C）でコピー</div>
               <div>4. 下のテキストエリアをクリック → <b>Cmd+V</b> で貼り付け</div>
               <div>5. プレビューを確認 → 「インポートして次へ」</div>
-              <div style={s.helpCode}>
-                {`- 親ノード\n  - 子ノード1\n    - 孫ノード\n  - 子ノード2`}
-              </div>
+              <div style={s.helpCode}>{`- 親ノード\n  - 子ノード1\n    - 孫ノード\n  - 子ノード2`}</div>
             </div>
           )}
         </div>
@@ -261,12 +258,7 @@ export default function ImportScreen() {
             マップタイトル
             <span style={s.sublabel}>（自動入力済み・編集可能）</span>
           </label>
-          <input
-            style={s.input}
-            value={title}
-            onChange={handleTitleChange}
-            placeholder="マップのタイトルを入力"
-          />
+          <input style={s.input} value={title} onChange={handleTitleChange} placeholder="マップのタイトルを入力" />
         </div>
 
         {/* メモ */}
@@ -275,20 +267,13 @@ export default function ImportScreen() {
             メモ
             <span style={s.sublabel}>（任意）「Whimsical の○○フォルダから」など</span>
           </label>
-          <input
-            style={s.input}
-            value={note}
-            onChange={e => setNote(e.target.value)}
-            placeholder="例：Whimsical の「戦略」フォルダから"
-          />
+          <input style={s.input} value={note} onChange={e => setNote(e.target.value)}
+            placeholder="例：Whimsical の「戦略」フォルダから" />
         </div>
 
         {/* ボタン */}
         <div style={s.btnRow}>
-          <button style={s.clearBtn} onClick={() => {
-            setRawText(""); setTitle(""); setNote(""); setPreview(null); setTitleEdited(false);
-            setTimeout(() => textareaRef.current?.focus(), 50);
-          }}>クリア</button>
+          <button style={s.clearBtn} onClick={() => { resetForm(); }}>クリア</button>
           <button style={s.importBtn(canImport)} onClick={handleImport} disabled={!canImport}>
             {importing ? "インポート中..." : "インポートして次へ →"}
           </button>
@@ -304,6 +289,7 @@ export default function ImportScreen() {
           fontSize: 14, fontWeight: 600, zIndex: 9999,
           boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
           fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif",
+          pointerEvents: "none",
         }}>
           {toast.msg}
         </div>
