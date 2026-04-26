@@ -16,7 +16,7 @@ export async function onRequestPost(context) {
 
   const res = await fetch(`${supaUrl}/rest/v1/mm_folders`, {
     method: "POST", headers: h,
-    body: JSON.stringify({ user_id, name: name.trim(), parent_id: parent_id ?? null, order_index: Date.now() }),
+    body: JSON.stringify({ user_id, name: name.trim(), parent_id: parent_id ?? null, order_index: Math.floor(Date.now() / 1000) }),
   });
   if (!res.ok) return json({ error: "DB error", detail: await res.text() }, 500);
   const [row] = await res.json();
