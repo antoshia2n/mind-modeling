@@ -5,14 +5,17 @@ import { T } from "shia2n-core";
 const PURPLE = "#a855f7";
 const GRAY   = "#d1d5db";
 const TEAL   = "#0ea5e9";
-const DROP_COLOR = "#10b981"; // ドロップ先ハイライト色（緑）
 
 /**
  * MmNode 表示ルール：
- * ホバー時         → 折りたたみボタンのみ
- * 選択時           → フォーマットツールバー（上部）+ 子追加・兄弟ボタン
- * ドロップ先候補時  → 緑のハイライトボーダー + "ここに移動" テキスト
- * マルチセレクト時  → 紫の選択ハイライト
+ * ホバー時     → 折りたたみボタン
+ * 選択時       → フォーマットツールバー（上部）+ 子追加・兄弟ボタン
+ * ツールバー内 → B/I/S | 色 | ⊕テンプレ | 🔗マップリンク
+ *
+ * エンター動作（案C）：
+ * - 編集中 Enter → コミット → 兄弟追加 → 即入力
+ * - 編集中 Shift+Enter → 改行
+ * - 編集中 Esc → キャンセル
  */
 export default function MmNode({ data, selected }) {
   const [editing, setEditing] = useState(false);
@@ -21,9 +24,15 @@ export default function MmNode({ data, selected }) {
   const inputRef = useRef(null);
 
   useEffect(() => { if (!editing) setDraft(data.label ?? ""); }, [data.label, editing]);
+
+  // forceEdit：新規ノード作成時に即入力モード
   useEffect(() => {
-    if (data.forceEdit && !editing) { setEditing(true); data.onEditStart?.(); }
+    if (data.forceEdit && !editing) {
+      setEditing(true);
+      data.onEditStart?.();
+    }
   }, [data.forceEdit]);
+
   useEffect(() => {
     if (editing && inputRef.current) {
       inputRef.current.focus();
@@ -37,15 +46,33 @@ export default function MmNode({ data, selected }) {
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
   }
+
   function startEdit() { if (!editing) { setEditing(true); data.onEditStart?.(); } }
+
   function commitEdit() {
-    setEditing(false); data.onEditEnd?.();
+    setEditing(false);
+    data.onEditEnd?.();
     const t = draft.trim();
     if (t !== (data.label ?? "")) data.onContentChange?.(t);
   }
+
   function handleKeyDown(e) {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitEdit(); }
-    if (e.key === "Escape") { e.stopPropagation(); setDraft(data.label ?? ""); setEditing(false); data.onEditEnd?.(); }
+    if (e.key === "Enter" && !e.shiftKey) {
+      // 1回目のEnter → テキスト確定（選択状態に戻る）
+      // 2回目のEnter → MapMode側が兄弟ノード追加として処理
+      e.preventDefault();
+      e.stopPropagation();
+      commitEdit();
+      return;
+    }
+    // Shift+Enter = 改行（textarea のデフォルト動作）
+    if (e.key === "Shift") return;
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setDraft(data.label ?? "");
+      setEditing(false);
+      data.onEditEnd?.();
+    }
   }
 
   const dir        = data.direction ?? "right";
@@ -63,10 +90,8 @@ export default function MmNode({ data, selected }) {
 
   // ─── ルートノード ────────────────────────────────────────
   if (data.isRoot) {
-    const bg = data.nodeColor || "#ffffff";
-    const border = isDropTarget
-      ? `2px solid ${DROP_COLOR}`
-      : `1.5px solid ${selected ? PURPLE : "#e2e8f0"}`;
+    const bg     = data.nodeColor || "#ffffff";
+    const border = isDropTarget ? `2px solid #10b981` : `1.5px solid ${selected ? PURPLE : "#e2e8f0"}`;
     return (
       <div
         onDoubleClick={startEdit}
@@ -76,11 +101,12 @@ export default function MmNode({ data, selected }) {
           background: isDropTarget ? "#f0fdf4" : bg,
           border, borderRadius: 10,
           padding: "10px 18px", minWidth: 80, maxWidth: editing ? 480 : 320,
-          boxShadow: isDropTarget ? `0 0 0 3px ${DROP_COLOR}40` : "0 1px 4px rgba(0,0,0,0.08)",
+          boxShadow: isDropTarget ? "0 0 0 3px #10b98140" : "0 1px 4px rgba(0,0,0,0.08)",
           cursor: "default", userSelect: "none", position: "relative",
-          transition: "border 0.1s, box-shadow 0.1s",
+          transition: "border 0.1s",
         }}
       >
+        {isDropTarget && <DropLabel />}
         <Handle id="tl" type="target" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
         <Handle id="tr" type="target" position={Position.Right} style={{ opacity: 0, pointerEvents: "none" }} />
         <Handle id="sl" type="source" position={Position.Left}
@@ -92,16 +118,16 @@ export default function MmNode({ data, selected }) {
             ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 10, height: 10, right: -5, opacity: 1, pointerEvents: "none" }
             : { opacity: 0, pointerEvents: "none" }} />
 
-        {/* ドロップ先ラベル */}
-        {isDropTarget && <DropLabel />}
-
         {showActions && <FormatToolbar data={data} />}
 
         {editing ? (
           <textarea ref={inputRef} value={draft}
             onChange={e => { autoResizeTA(e.target); setDraft(e.target.value); }}
             onBlur={commitEdit} onKeyDown={handleKeyDown} rows={1}
-            style={{ fontSize: 16, fontWeight: data.bold ? 700 : 600, fontStyle: data.italic ? "italic" : "normal", textDecoration: data.strikethrough ? "line-through" : "none", color: data.textColor || "#374151", fontFamily: "inherit", background: "none", border: "none", outline: "none", padding: 0, width: "100%", resize: "none", overflow: "hidden", display: "block" }} />
+            style={{ fontSize: 16, fontWeight: data.bold ? 700 : 600, fontStyle: data.italic ? "italic" : "normal",
+              textDecoration: data.strikethrough ? "line-through" : "none", color: data.textColor || "#374151",
+              fontFamily: "inherit", background: "none", border: "none", outline: "none", padding: 0,
+              width: "100%", resize: "none", overflow: "hidden", display: "block" }} />
         ) : (
           <span style={{ fontSize: 16, lineHeight: 1.5, display: "block", ...textStyle, fontWeight: data.bold ? 700 : 600, color: data.textColor || "#374151" }}>
             {data.label || <span style={{ color: "#9ca3af", fontWeight: 400 }}>新しいノード</span>}
@@ -120,18 +146,15 @@ export default function MmNode({ data, selected }) {
   const hasBg   = !!data.nodeColor;
   const hasLink = !!data.linkedMapId;
 
-  // ボーダー色
   const nodeBorder = (() => {
-    if (isDropTarget)        return `2px solid ${DROP_COLOR}`;
-    if (selected)            return `1.5px solid rgba(168,85,247,0.6)`;
-    return `1.5px solid transparent`;
+    if (isDropTarget) return "2px solid #10b981";
+    if (selected)     return `1.5px solid rgba(168,85,247,0.6)`;
+    return "1.5px solid transparent";
   })();
-
-  // 背景色
   const nodeBg = (() => {
-    if (isDropTarget)        return "#f0fdf4";
-    if (hasBg)               return data.nodeColor;
-    if (selected)            return "rgba(168,85,247,0.07)";
+    if (isDropTarget) return "#f0fdf4";
+    if (hasBg)        return data.nodeColor;
+    if (selected)     return "rgba(168,85,247,0.07)";
     return "transparent";
   })();
 
@@ -152,10 +175,11 @@ export default function MmNode({ data, selected }) {
         padding: hasBg || isDropTarget ? "4px 8px" : "2px 4px", borderRadius: 6,
         background: nodeBg, border: nodeBorder, cursor: "default", userSelect: "none",
         maxWidth: editing ? 400 : 260,
-        boxShadow: isDropTarget ? `0 0 0 3px ${DROP_COLOR}40` : "none",
-        transition: "border 0.1s, box-shadow 0.1s",
+        boxShadow: isDropTarget ? "0 0 0 3px #10b98140" : "none",
+        transition: "border 0.1s",
       }}
     >
+      {isDropTarget && <DropLabel />}
       <Handle id="tl" type="target" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
       <Handle id="tr" type="target" position={Position.Right} style={{ opacity: 0, pointerEvents: "none" }} />
       <Handle id="sr" type="source" position={Position.Right}
@@ -167,12 +191,9 @@ export default function MmNode({ data, selected }) {
           ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 9, height: 9, left: -4.5, opacity: 1, pointerEvents: "none" }
           : { opacity: 0, pointerEvents: "none" }} />
 
-      {/* ドロップ先ラベル */}
-      {isDropTarget && <DropLabel />}
-
       {showActions && <FormatToolbar data={data} isLeft={isLeft} />}
 
-      {/* 折りたたみトグル（ホバー or 選択中） */}
+      {/* 折りたたみ（ホバーor選択中） */}
       {showCollapse && (
         <button
           title={data.collapsed ? "展開 (Cmd+/)" : "折りたたむ (Cmd+/)"}
@@ -193,9 +214,14 @@ export default function MmNode({ data, selected }) {
         <textarea ref={inputRef} value={draft}
           onChange={e => { autoResizeTA(e.target); setDraft(e.target.value); }}
           onBlur={commitEdit} onKeyDown={handleKeyDown} rows={1}
-          style={{ fontSize: 14, ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"), fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif", background: "none", border: "none", outline: "none", padding: 0, minWidth: 60, resize: "none", overflow: "hidden" }} />
+          style={{ fontSize: 14, ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"),
+            fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif",
+            background: "none", border: "none", outline: "none", padding: 0, minWidth: 60,
+            resize: "none", overflow: "hidden" }} />
       ) : (
-        <span style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: "nowrap", ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"), fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif" }}>
+        <span style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: "nowrap", ...textStyle,
+          fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"),
+          fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif" }}>
           {data.label || <span style={{ color: "#9ca3af", fontStyle: "italic", fontWeight: 400 }}>新しいノード</span>}
         </span>
       )}
@@ -206,7 +232,7 @@ export default function MmNode({ data, selected }) {
           style={{ fontSize: 11, cursor: "pointer", color: TEAL, flexShrink: 0, lineHeight: 1 }}>🔗</span>
       )}
 
-      {/* 操作ボタン群（選択中のみ） */}
+      {/* クイックアクション（選択中のみ） */}
       {showActions && (
         <>
           <QuickBtn posStyle={childBtnOffset} title="子ノードを追加 (Tab)" onClick={e => { e.stopPropagation(); data.onAddChild?.(); }}>
@@ -222,13 +248,13 @@ export default function MmNode({ data, selected }) {
   );
 }
 
-// ─── ドロップ先ラベル ─────────────────────────────────────────
+// ─── ドロップ先ラベル ─────────────────────────────────────
 
 function DropLabel() {
   return (
     <div style={{
       position: "absolute", top: -24, left: "50%", transform: "translateX(-50%)",
-      background: DROP_COLOR, color: "#fff", borderRadius: 6,
+      background: "#10b981", color: "#fff", borderRadius: 6,
       padding: "2px 8px", fontSize: 11, fontWeight: 700,
       whiteSpace: "nowrap", pointerEvents: "none", zIndex: 100,
       fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif",
@@ -236,12 +262,15 @@ function DropLabel() {
   );
 }
 
-// ─── フォーマットツールバー ───────────────────────────────────
+// ─── フォーマットツールバー ───────────────────────────────
 
 function FormatToolbar({ data }) {
   return (
     <div onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
-      style={{ position: "absolute", bottom: "calc(100% + 10px)", left: "50%", transform: "translateX(-50%)", background: "#1f2937", borderRadius: 10, padding: "5px 8px", display: "flex", alignItems: "center", gap: 2, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", zIndex: 1000, whiteSpace: "nowrap" }}>
+      style={{ position: "absolute", bottom: "calc(100% + 10px)", left: "50%", transform: "translateX(-50%)",
+        background: "#1f2937", borderRadius: 10, padding: "5px 8px",
+        display: "flex", alignItems: "center", gap: 2,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.3)", zIndex: 1000, whiteSpace: "nowrap" }}>
       <ToolBtn active={data.bold}          title="太字 (⌘B)"  onClick={() => data.onToggleBold?.()}><b>B</b></ToolBtn>
       <ToolBtn active={data.italic}        title="斜体 (⌘I)"  onClick={() => data.onToggleItalic?.()}><i>I</i></ToolBtn>
       <ToolBtn active={data.strikethrough} title="取り消し線" onClick={() => data.onToggleStrikethrough?.()}><span style={{ textDecoration: "line-through" }}>S</span></ToolBtn>
@@ -254,10 +283,10 @@ function FormatToolbar({ data }) {
         onChange={c => data.onNodeColorChange?.(c)} onReset={() => data.onNodeColorChange?.(null)} />
       <Sep />
       <ToolBtn title="テンプレートを挿入" onClick={() => data.onInsertTemplate?.()}>
-        <span style={{ fontSize: 11, color: "#5eead4" }}>⊕</span>
+        <span style={{ fontSize:11, color:"#5eead4" }}>⊕</span>
       </ToolBtn>
       <ToolBtn active={!!data.linkedMapId} title={data.linkedMapId ? "マップリンクを変更/解除" : "マップリンクを設定"} onClick={() => data.onMapLink?.()}>
-        <span style={{ fontSize: 11 }}>🔗</span>
+        <span style={{ fontSize:11 }}>🔗</span>
       </ToolBtn>
     </div>
   );
@@ -266,21 +295,22 @@ function FormatToolbar({ data }) {
 function ToolBtn({ children, active, onClick, title }) {
   const [h, setH] = useState(false);
   return <button title={title} onClick={e => { e.stopPropagation(); onClick(); }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
-    style={{ background: active ? "rgba(168,85,247,0.5)" : (h ? "rgba(255,255,255,0.1)" : "transparent"), border: "none", borderRadius: 5, color: "#fff", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 13 }}>{children}</button>;
+    style={{ background: active ? "rgba(168,85,247,0.5)" : (h ? "rgba(255,255,255,0.1)" : "transparent"), border:"none", borderRadius:5, color:"#fff", width:30, height:30, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:13 }}>{children}</button>;
 }
-function Sep() { return <div style={{ width: 1, height: 18, background: "#374151", margin: "0 3px" }} />; }
+function Sep() { return <div style={{ width:1, height:18, background:"#374151", margin:"0 3px" }} />; }
 function ColorGroup({ title, value, hasValue, indicator, onChange, onReset }) {
   const inputRef = useRef(null);
   const [h, setH] = useState(false);
-  return <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
+  return <div style={{ display:"flex", alignItems:"center", gap:1 }}>
     <button title={title} onClick={e => { e.stopPropagation(); inputRef.current?.click(); }} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
-      style={{ background: h ? "rgba(255,255,255,0.1)" : "transparent", border: "none", borderRadius: 5, width: 30, height: 30, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", gap: 2 }}>{indicator}</button>
-    <input ref={inputRef} type="color" value={value} onChange={e => onChange(e.target.value)} style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }} />
-    {hasValue && <button title={`${title}をリセット`} onClick={e => { e.stopPropagation(); onReset(); }} style={{ background:"transparent", border:"none", color:"rgba(255,255,255,0.5)", fontSize:10, width:16, height:16, cursor:"pointer", padding:0, display:"flex", alignItems:"center", justifyContent:"center", borderRadius:3 }}>✕</button>}
+      style={{ background: h ? "rgba(255,255,255,0.1)" : "transparent", border:"none", borderRadius:5, width:30, height:30, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", cursor:"pointer", gap:2 }}>{indicator}</button>
+    <input ref={inputRef} type="color" value={value} onChange={e => onChange(e.target.value)} style={{ position:"absolute", opacity:0, width:0, height:0, pointerEvents:"none" }} />
+    {hasValue && <button title={`${title}をリセット`} onClick={e => { e.stopPropagation(); onReset(); }}
+      style={{ background:"transparent", border:"none", color:"rgba(255,255,255,0.5)", fontSize:10, width:16, height:16, cursor:"pointer", padding:0, display:"flex", alignItems:"center", justifyContent:"center", borderRadius:3 }}>✕</button>}
   </div>;
 }
 function QuickBtn({ children, title, onClick, posStyle }) {
   const [h, setH] = useState(false);
   return <button title={title} onClick={onClick} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
-    style={{ position: "absolute", ...posStyle, background: "white", border: `1.5px solid ${h ? PURPLE : GRAY}`, borderRadius: "50%", width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, color: h ? PURPLE : "#9ca3af", padding: 0, boxShadow: "0 1px 4px rgba(0,0,0,0.12)", zIndex: 10 }}>{children}</button>;
+    style={{ position:"absolute", ...posStyle, background:"white", border:`1.5px solid ${h ? PURPLE : GRAY}`, borderRadius:"50%", width:24, height:24, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:11, color: h ? PURPLE : "#9ca3af", padding:0, boxShadow:"0 1px 4px rgba(0,0,0,0.12)", zIndex:10 }}>{children}</button>;
 }
