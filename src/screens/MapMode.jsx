@@ -160,24 +160,24 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     if (historyIdxRef.current <= 0) { showToast("これ以上取り消せません"); return; }
     isUndoingRef.current = true;
     const targetSnap = historyRef.current[historyIdxRef.current - 1];
-    showToast("⏪ 取り消し中...");
+    showToast("取り消し中...");
     await applySnapshot(targetSnap, nodesRef.current);
     historyIdxRef.current--;
     onNodesChange(targetSnap); onSaved();
     isUndoingRef.current = false;
-    showToast("⏪ 取り消しました");
+    showToast("取り消しました");
   }, [onNodesChange, onSaved]);
 
   const redo = useCallback(async () => {
     if (historyIdxRef.current >= historyRef.current.length - 1) { showToast("これ以上やり直せません"); return; }
     isUndoingRef.current = true;
     const targetSnap = historyRef.current[historyIdxRef.current + 1];
-    showToast("⏩ やり直し中...");
+    showToast("やり直し中...");
     await applySnapshot(targetSnap, nodesRef.current);
     historyIdxRef.current++;
     onNodesChange(targetSnap); onSaved();
     isUndoingRef.current = false;
-    showToast("⏩ やり直しました");
+    showToast("やり直しました");
   }, [onNodesChange, onSaved]);
 
   // ─── PDF 操作 ─────────────────────────────────────────────
@@ -193,7 +193,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     if (!file || !nodeId) return;
     if (file.type !== "application/pdf") { showToast("PDF ファイルのみアップロードできます", "error"); return; }
     if (file.size > PDF_MAX_MB * 1024 * 1024) { showToast(`ファイルサイズは ${PDF_MAX_MB}MB 以内にしてください`, "error"); return; }
-    showToast("📄 アップロード中...");
+    showToast("PDF アップロード中...");
     const ns = nodesRef.current;
     const existingNode = ns.find(n => n.id === nodeId);
     if (existingNode?.pdf_url) await deletePdf(existingNode.pdf_url).catch(() => {});
@@ -617,9 +617,9 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
         <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", background: toastType === "error" ? "rgba(220,38,38,0.9)" : "rgba(30,30,40,0.85)", color: "#fff", borderRadius: 8, padding: "8px 18px", fontSize: 13, pointerEvents: "none", whiteSpace: "nowrap" }}>{toastMsg}</div>
       )}
       <div style={{ position: "absolute", bottom: 16, right: 16, background: "rgba(255,255,255,0.92)", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#94a3b8", lineHeight: 1.9, pointerEvents: "none" }}>
-        <div><b style={{color:"#6b7280"}}>⌘Z</b> 取り消し ・ <b style={{color:"#6b7280"}}>⌘⇧Z</b> やり直し</div>
-        <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加 ・ <b style={{color:"#6b7280"}}>📎</b> PDF</div>
-        <div>ダブルクリックで編集 ・ 📄でスライドショー</div>
+        <div><b style={{color:"#6b7280"}}>⌘Z</b> 取消 ・ <b style={{color:"#6b7280"}}>⌘⇧Z</b> やり直し</div>
+        <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加 ・ + PDF</div>
+        <div>ダブルクリックで編集 ・ PDF でスライドショー</div>
       </div>
     </div>
   );

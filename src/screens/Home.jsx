@@ -1,149 +1,132 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuthUid, T } from "shia2n-core";
-import { createMap, deleteMap } from "../lib/supabase.js";
+import { deleteMap } from "../lib/supabase.js";
 import { navigate } from "../lib/navigate.js";
 
-const ACCENT       = "#3b82f6";
-const PURPLE       = "#a855f7";
-const BORDER       = "#e2e8f0";
-const DANGER       = "#ef4444";
-const FOLDER_COLOR = "#f59e0b";
+const ACCENT  = "#3b82f6";
+const PURPLE  = "#a855f7";
+const BORDER  = "#e2e8f0";
+const DANGER  = "#ef4444";
+const MUTED   = "#94a3b8";
+
+const LAST_FOLDER_KEY    = "mm_home_last_folder_id";
+const FOLDER_COLLAPSE_KEY = "mm_home_folder_collapse";
 
 function authH() {
   return { "Content-Type": "application/json", "Authorization": `Bearer ${window.__MM_SECRET__ ?? ""}` };
 }
-
-// フラット配列 → ツリーに組み立て
 function buildTree(folders) {
   const byParent = {};
-  for (const f of folders) {
-    const key = f.parent_id ?? "__root__";
-    if (!byParent[key]) byParent[key] = [];
-    byParent[key].push(f);
-  }
-  function build(pid) {
-    return (byParent[pid] ?? []).map(f => ({ ...f, children: build(f.id) }));
-  }
+  for (const f of folders) { const k = f.parent_id ?? "__root__"; if (!byParent[k]) byParent[k] = []; byParent[k].push(f); }
+  function build(pid) { return (byParent[pid] ?? []).map(f => ({ ...f, children: build(f.id) })); }
   return build("__root__");
 }
+function relativeTime(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1)   return "たった今";
+  if (m < 60)  return `${m}分前`;
+  const h = Math.floor(m / 60);
+  if (h < 24)  return `${h}時間前`;
+  const d = Math.floor(h / 24);
+  if (d < 30)  return `${d}日前`;
+  return new Date(iso).toLocaleDateString("ja-JP", { month: "short", day: "numeric" });
+}
 
-// ─── FolderNode（必ず Home の外に定義する）──────────────────────────
-// Home の内側に定義すると React が毎レンダーで別コンポーネントと判断し
-// アンマウント→マウントを繰り返してフォルダが表示されなくなる。
-function FolderNode({
-  folder, depth = 0,
-  selectedFolderId, collapsed, setCollapsed,
-  editingFolderId, editingName, setEditingName,
-  dragOver,
-  onSelect, onDragOver, onDragLeave, onDrop, onRename, onCommitRename, onDelete,
-}) {
+// ─── FolderNode（親コンポーネントの外側で定義）────────────
+
+function FolderNode({ folder, depth, selectedFolderId, collapsed, setCollapsed, editingFolderId, editingName, setEditingName, dragOver, onSelect, onDragOver, onDragLeave, onDrop, onRename, onCommitRename, onDelete }) {
   const isSelected  = selectedFolderId === folder.id;
   const isCollapsed = collapsed[folder.id];
   const isDragOver  = dragOver === folder.id;
   const hasChildren = folder.children?.length > 0;
 
+  function toggleCollapse(e) {
+    e.stopPropagation();
+    setCollapsed(prev => {
+      const next = { ...prev, [folder.id]: !prev[folder.id] };
+      try { localStorage.setItem(FOLDER_COLLAPSE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  const indent = depth * 14;
+  const rowStyle = {
+    display: "flex", alignItems: "center", gap: 5,
+    paddingLeft: 16 + indent, paddingRight: 12, paddingTop: 6, paddingBottom: 6,
+    cursor: "pointer", fontSize: 13,
+    background: isDragOver ? "#f0f9ff" : (isSelected ? "#f5f3ff" : "transparent"),
+    borderLeft: isSelected ? `3px solid ${PURPLE}` : "3px solid transparent",
+    color: isSelected ? PURPLE : T.fg,
+    fontWeight: isSelected ? 600 : 400,
+    borderBottom: isDragOver ? `1px dashed ${ACCENT}` : "1px solid transparent",
+  };
+
   return (
     <div>
-      <div style={{ paddingLeft: depth * 12 }}>
-        {editingFolderId === folder.id ? (
-          <div style={{ display: "flex", alignItems: "center", padding: "4px 16px", gap: 6 }}>
-            <input
-              autoFocus value={editingName}
-              onChange={e => setEditingName(e.target.value)}
-              onBlur={() => onCommitRename(folder.id)}
-              onKeyDown={e => { if (e.key === "Enter") onCommitRename(folder.id); if (e.key === "Escape") onCommitRename(null); }}
-              style={{ flex: 1, fontSize: 13, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "4px 8px", outline: "none", fontFamily: "inherit" }}
-            />
-          </div>
-        ) : (
-          <button
-            style={{
-              display: "flex", alignItems: "center", gap: 6,
-              padding: "7px 16px", cursor: "pointer", fontSize: 13, width: "100%", textAlign: "left",
-              background: isDragOver ? "#fef3c7" : (isSelected ? "#f5f3ff" : "none"),
-              border: isDragOver ? `1px dashed ${FOLDER_COLOR}` : "1px solid transparent",
-              borderLeft: isSelected ? `3px solid ${PURPLE}` : "3px solid transparent",
-              color: isSelected ? PURPLE : T.fg,
-              fontWeight: isSelected ? 700 : 400,
-            }}
-            onClick={() => onSelect(folder.id)}
-            onDoubleClick={() => onRename(folder.id)}
-            onDragOver={e => onDragOver(e, folder.id)}
-            onDragLeave={onDragLeave}
-            onDrop={e => onDrop(e, folder.id)}
-          >
-            {hasChildren ? (
-              <span
-                onClick={e => { e.stopPropagation(); setCollapsed(prev => ({ ...prev, [folder.id]: !prev[folder.id] })); }}
-                style={{ fontSize: 9, color: T.muted, width: 12, flexShrink: 0, userSelect: "none" }}
-              >{isCollapsed ? "▶" : "▼"}</span>
-            ) : (
-              <span style={{ width: 12, flexShrink: 0 }} />
-            )}
-            <span style={{ fontSize: 14 }}>📁</span>
-            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{folder.name}</span>
-            {folder.maps?.length > 0 && <span style={{ fontSize: 11, color: T.muted, flexShrink: 0 }}>{folder.maps.length}</span>}
-            <span
-              onClick={e => { e.stopPropagation(); onDelete(folder.id, folder.name); }}
-              style={{ fontSize: 11, color: T.muted, cursor: "pointer", padding: "0 2px", flexShrink: 0, opacity: 0.5 }}
-              title="フォルダを削除"
-            >✕</span>
-          </button>
-        )}
-      </div>
+      {editingFolderId === folder.id ? (
+        <div style={{ paddingLeft: 16 + indent, paddingRight: 12, paddingTop: 4, paddingBottom: 4 }}>
+          <input autoFocus value={editingName} onChange={e => setEditingName(e.target.value)}
+            onBlur={() => onCommitRename(folder.id)}
+            onKeyDown={e => { if (e.key === "Enter") onCommitRename(folder.id); if (e.key === "Escape") onCommitRename(null); }}
+            style={{ width: "100%", fontSize: 13, border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 8px", outline: "none", fontFamily: "inherit" }} />
+        </div>
+      ) : (
+        <div style={rowStyle} onClick={() => onSelect(folder.id)} onDoubleClick={() => onRename(folder.id)}
+          onDragOver={e => onDragOver(e, folder.id)} onDragLeave={onDragLeave} onDrop={e => onDrop(e, folder.id)}>
+          {/* 折りたたみトグル */}
+          <span onClick={toggleCollapse} style={{ width: 14, fontSize: 9, color: MUTED, userSelect: "none", flexShrink: 0, textAlign: "center" }}>
+            {hasChildren ? (isCollapsed ? "▸" : "▾") : ""}
+          </span>
+          {/* フォルダ名 */}
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{folder.name}</span>
+          {/* マップ数 */}
+          {folder.maps?.length > 0 && (
+            <span style={{ fontSize: 11, color: MUTED, flexShrink: 0, background: "#f1f5f9", borderRadius: 10, padding: "0 6px", minWidth: 18, textAlign: "center" }}>{folder.maps.length}</span>
+          )}
+          {/* 削除 */}
+          <span onClick={e => { e.stopPropagation(); onDelete(folder.id, folder.name); }}
+            style={{ fontSize: 11, color: MUTED, cursor: "pointer", opacity: 0.5, flexShrink: 0, paddingLeft: 4 }}>×</span>
+        </div>
+      )}
       {hasChildren && !isCollapsed && folder.children.map(child => (
-        <FolderNode
-          key={child.id} folder={child} depth={depth + 1}
+        <FolderNode key={child.id} folder={child} depth={depth + 1}
           selectedFolderId={selectedFolderId} collapsed={collapsed} setCollapsed={setCollapsed}
           editingFolderId={editingFolderId} editingName={editingName} setEditingName={setEditingName}
-          dragOver={dragOver}
-          onSelect={onSelect} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
-          onRename={onRename} onCommitRename={onCommitRename} onDelete={onDelete}
-        />
+          dragOver={dragOver} onSelect={onSelect} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+          onRename={onRename} onCommitRename={onCommitRename} onDelete={onDelete} />
       ))}
     </div>
   );
 }
 
-// ─── FolderMoveMenu ─────────────────────────────────────────────────
-function FolderMoveMenu({ mapId, folders, currentFolderId, onMove }) {
-  return (
-    <>
-      <div style={{ padding: "6px 16px 4px", fontSize: 11, color: "#94a3b8", fontWeight: 700, borderBottom: `1px solid ${BORDER}` }}>フォルダへ移動</div>
-      <button style={{ padding: "8px 16px", cursor: "pointer", fontSize: 12, color: !currentFolderId ? PURPLE : "#374151", display: "block", width: "100%", textAlign: "left", background: !currentFolderId ? "#f5f3ff" : "none", border: "none", borderBottom: `1px solid ${BORDER}` }}
-        onClick={() => onMove(mapId, null)}>
-        🏠 ルート{!currentFolderId ? " ✓" : ""}
-      </button>
-      {folders.map(f => (
-        <button key={f.id}
-          style={{ padding: "8px 16px", cursor: "pointer", fontSize: 12, color: currentFolderId === f.id ? PURPLE : "#374151", display: "block", width: "100%", textAlign: "left", background: currentFolderId === f.id ? "#f5f3ff" : "none", border: "none", borderBottom: `1px solid ${BORDER}` }}
-          onClick={() => onMove(mapId, f.id)}>
-          📁 {f.name}{currentFolderId === f.id ? " ✓" : ""}
-        </button>
-      ))}
-    </>
-  );
-}
+// ─── Home ────────────────────────────────────────────────────
 
-// ─── Home ────────────────────────────────────────────────────────────
 export default function Home() {
   const uid = useAuthUid();
 
-  const [tree,             setTree]             = useState({ root_maps: [], folders: [] });
-  const [loading,          setLoading]          = useState(true);
-  const [creating,         setCreating]         = useState(false);
-  const [search,           setSearch]           = useState("");
-  const [sort,             setSort]             = useState("updated");
-  const [collapsed,        setCollapsed]        = useState({});
-  const [selectedFolderId, setSelectedFolderId] = useState(null);
-  const [breadcrumbs,      setBreadcrumbs]      = useState([]);
-  const [editingFolderId,  setEditingFolderId]  = useState(null);
-  const [editingName,      setEditingName]      = useState("");
-  const [actionMenuMapId,  setActionMenuMapId]  = useState(null);
-  const [dragOver,         setDragOver]         = useState(null);
-  const [hoveredMapId,     setHoveredMapId]     = useState(null);
-  const [toast,            setToast]            = useState(null);
+  const [tree, setTree] = useState({ root_maps: [], folders: [] });
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [search, setSearch] = useState("");
+  const [sort, setSort]     = useState("updated");
+  const [dragOver, setDragOver] = useState(null);
+  const [toast, setToast]   = useState(null);
+  const [editingFolderId, setEditingFolderId] = useState(null);
+  const [editingName, setEditingName]         = useState("");
+  const [actionMenuMapId, setActionMenuMapId] = useState(null);
 
+  const [selectedFolderId, setSelectedFolderId] = useState(() => {
+    try { return localStorage.getItem(LAST_FOLDER_KEY) ?? null; } catch { return null; }
+  });
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(FOLDER_COLLAPSE_KEY) ?? "{}"); } catch { return {}; }
+  });
+
+  function selectFolder(id) {
+    setSelectedFolderId(id);
+    try { if (id) localStorage.setItem(LAST_FOLDER_KEY, id); else localStorage.removeItem(LAST_FOLDER_KEY); } catch {}
+  }
   function showToast(msg, type = "success") { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); }
 
   const loadTree = useCallback(async () => {
@@ -151,345 +134,251 @@ export default function Home() {
     setLoading(true);
     try {
       const res = await fetch(`/api/internal/get-folder-tree?user_id=${uid}`, { headers: authH() });
-      if (!res.ok) {
-        if (res.status === 401) showToast("認証エラー：環境変数 VITE_MM_INTERNAL_SECRET を確認してください。", "error");
-        else showToast(`フォルダ取得に失敗しました（HTTP ${res.status}）`, "error");
-        setLoading(false); return;
-      }
-      const data = await res.json();
-      setTree(data);
+      if (!res.ok) { showToast("フォルダ取得に失敗しました", "error"); setLoading(false); return; }
+      setTree(await res.json());
     } catch { showToast("ネットワークエラー", "error"); }
     setLoading(false);
   }, [uid]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
 
-  // パンくずリスト
   useEffect(() => {
-    if (!selectedFolderId) { setBreadcrumbs([]); return; }
-    const folderMap = Object.fromEntries(tree.folders.map(f => [f.id, f]));
-    const crumbs = [];
-    let cur = folderMap[selectedFolderId];
-    while (cur) { crumbs.unshift(cur); cur = cur.parent_id ? folderMap[cur.parent_id] : null; }
-    setBreadcrumbs(crumbs);
-  }, [selectedFolderId, tree.folders]);
+    if (selectedFolderId && tree.folders.length > 0) {
+      if (!tree.folders.find(f => f.id === selectedFolderId)) selectFolder(null);
+    }
+  }, [tree.folders, selectedFolderId]);
 
-  // 現在フォルダのマップ
   const currentMaps = (selectedFolderId === null
     ? tree.root_maps
     : (tree.folders.find(f => f.id === selectedFolderId)?.maps ?? [])
   ).filter(m => !search.trim() || (m.title || "").toLowerCase().includes(search.toLowerCase()))
-   .sort((a, b) => sort === "title"
-     ? (a.title || "").localeCompare(b.title || "", "ja")
-     : new Date(b.updated_at) - new Date(a.updated_at)
-   );
+   .sort((a, b) => sort === "title" ? (a.title || "").localeCompare(b.title || "", "ja") : new Date(b.updated_at) - new Date(a.updated_at));
 
-  // サブフォルダ（現在の直下）
   const folderTree = buildTree(tree.folders);
-  const currentSubFolders = folderTree.filter(f =>
-    selectedFolderId === null
-      ? f.parent_id === null || f.parent_id === undefined
-      : f.parent_id === selectedFolderId
-  );
 
-  // ─── ハンドラ群 ──────────────────────────────────────────
+  // パンくず
+  const [breadcrumbs, setBreadcrumbs] = useState([]);
+  useEffect(() => {
+    if (!selectedFolderId) { setBreadcrumbs([]); return; }
+    const fm = Object.fromEntries(tree.folders.map(f => [f.id, f]));
+    const crumbs = [];
+    let cur = fm[selectedFolderId];
+    while (cur) { crumbs.unshift(cur); cur = cur.parent_id ? fm[cur.parent_id] : null; }
+    setBreadcrumbs(crumbs);
+  }, [selectedFolderId, tree.folders]);
 
   async function handleCreateMap() {
     if (creating) return;
     setCreating(true);
     try {
-      const newMap = await createMap(uid);
-      if (newMap) {
-        if (selectedFolderId) {
-          await fetch("/api/internal/move-map-to-folder", {
-            method: "POST", headers: authH(),
-            body: JSON.stringify({ map_id: newMap.id, user_id: uid, folder_id: selectedFolderId }),
-          });
-        }
-        navigate(`/m/${newMap.id}`);
+      const { createMap } = await import("../lib/supabase.js");
+      const nm = await createMap(uid);
+      if (nm) {
+        if (selectedFolderId) await fetch("/api/internal/move-map-to-folder", { method: "POST", headers: authH(), body: JSON.stringify({ map_id: nm.id, user_id: uid, folder_id: selectedFolderId }) });
+        navigate(`/m/${nm.id}`);
       }
-    } catch { showToast("マップ作成に失敗しました。", "error"); }
+    } catch { showToast("マップ作成に失敗しました", "error"); }
     setCreating(false);
   }
 
   async function handleDeleteMap(e, mapId) {
     e.stopPropagation();
-    if (!window.confirm("このマップを削除しますか？\n（ノードも全て削除されます）")) return;
-    await deleteMap(mapId);
-    await loadTree();
+    if (!window.confirm("このマップを削除しますか？")) return;
+    await deleteMap(mapId); await loadTree();
   }
 
   async function handleCreateFolder() {
-    const name = window.prompt("フォルダ名を入力してください：");
-    if (!name?.trim()) return;
-    try {
-      const res = await fetch("/api/internal/create-folder", {
-        method: "POST", headers: authH(),
-        body: JSON.stringify({ user_id: uid, name: name.trim(), parent_id: selectedFolderId }),
-      });
-      if (!res.ok) {
-        showToast(`フォルダ作成に失敗しました（HTTP ${res.status}）`, "error"); return;
-      }
-      await loadTree();
-      showToast(`「${name.trim()}」を作成しました`);
-    } catch { showToast("ネットワークエラー", "error"); }
+    const name = window.prompt("フォルダ名："); if (!name?.trim()) return;
+    const res = await fetch("/api/internal/create-folder", { method: "POST", headers: authH(), body: JSON.stringify({ user_id: uid, name: name.trim(), parent_id: selectedFolderId }) });
+    if (!res.ok) { showToast("フォルダ作成に失敗しました", "error"); return; }
+    await loadTree(); showToast(`「${name.trim()}」を作成しました`);
   }
 
   async function handleDeleteFolder(folderId, folderName) {
-    if (!window.confirm(`「${folderName}」を削除しますか？\n\n中のマップ・サブフォルダはルートに移動します。`)) return;
-    try {
-      const res = await fetch("/api/internal/delete-folder", {
-        method: "POST", headers: authH(),
-        body: JSON.stringify({ folder_id: folderId, user_id: uid, mode: "move_to_root" }),
-      });
-      if (!res.ok) { showToast("削除に失敗しました。", "error"); return; }
-      if (selectedFolderId === folderId) setSelectedFolderId(null);
-      await loadTree();
-      showToast(`「${folderName}」を削除しました`);
-    } catch { showToast("ネットワークエラー", "error"); }
+    if (!window.confirm(`「${folderName}」を削除しますか？\n中のマップはルートに移動します。`)) return;
+    await fetch("/api/internal/delete-folder", { method: "POST", headers: authH(), body: JSON.stringify({ folder_id: folderId, user_id: uid, mode: "move_to_root" }) });
+    if (selectedFolderId === folderId) selectFolder(null);
+    await loadTree(); showToast(`「${folderName}」を削除しました`);
   }
 
-  function handleRenameFolder(folderId) {
-    const folder = tree.folders.find(f => f.id === folderId);
-    if (!folder) return;
-    setEditingFolderId(folderId);
-    setEditingName(folder.name);
+  function handleRenameFolder(id) {
+    const f = tree.folders.find(f => f.id === id); if (!f) return;
+    setEditingFolderId(id); setEditingName(f.name);
   }
 
-  async function handleCommitRenameFolder(folderId) {
-    if (folderId === null) { setEditingFolderId(null); return; }
-    if (!editingName.trim()) { setEditingFolderId(null); return; }
-    try {
-      await fetch("/api/internal/update-folder", {
-        method: "POST", headers: authH(),
-        body: JSON.stringify({ folder_id: folderId, user_id: uid, name: editingName.trim() }),
-      });
-      setEditingFolderId(null);
-      await loadTree();
-    } catch { showToast("名前変更に失敗しました。", "error"); setEditingFolderId(null); }
+  async function handleCommitRenameFolder(id) {
+    if (!id || !editingName.trim()) { setEditingFolderId(null); return; }
+    await fetch("/api/internal/update-folder", { method: "POST", headers: authH(), body: JSON.stringify({ folder_id: id, user_id: uid, name: editingName.trim() }) });
+    setEditingFolderId(null); await loadTree();
   }
 
   async function handleMoveMapToFolder(mapId, targetFolderId) {
-    try {
-      await fetch("/api/internal/move-map-to-folder", {
-        method: "POST", headers: authH(),
-        body: JSON.stringify({ map_id: mapId, user_id: uid, folder_id: targetFolderId }),
-      });
-      setActionMenuMapId(null);
-      await loadTree();
-    } catch { showToast("移動に失敗しました。", "error"); }
+    await fetch("/api/internal/move-map-to-folder", { method: "POST", headers: authH(), body: JSON.stringify({ map_id: mapId, user_id: uid, folder_id: targetFolderId }) });
+    setActionMenuMapId(null); await loadTree();
   }
 
   function handleDragStart(e, mapId) { e.dataTransfer.setData("mapId", mapId); }
-  function handleDragOver(e, folderId) { e.preventDefault(); setDragOver(folderId); }
-  function handleDragLeave() { setDragOver(null); }
+  function handleDragOver(e, id)  { e.preventDefault(); setDragOver(id); }
+  function handleDragLeave()      { setDragOver(null); }
   async function handleDrop(e, folderId) {
     e.preventDefault(); setDragOver(null);
     const mapId = e.dataTransfer.getData("mapId");
     if (mapId) await handleMoveMapToFolder(mapId, folderId);
   }
 
-  // ─── スタイル ──────────────────────────────────────────────
-
-  const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
-
-  const s = {
-    wrap: { minHeight: "100vh", background: T.bg, color: T.fg, fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif" },
-    header: { padding: "14px 20px", borderBottom: `1px solid ${BORDER}`, display: "flex", alignItems: "center", gap: 10 },
-    appTitle: { fontSize: 17, fontWeight: 700, flex: 1 },
-    headerBtn: (color) => ({ background: "none", border: `1px solid ${color ?? BORDER}`, borderRadius: 7, padding: "7px 12px", fontSize: 12, fontWeight: 600, color: color ?? T.muted, cursor: "pointer", whiteSpace: "nowrap" }),
-    createBtn: { background: ACCENT, color: "#fff", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: creating ? "default" : "pointer", opacity: creating ? 0.6 : 1 },
-    layout: isMobile ? { display: "flex", flexDirection: "column" } : { display: "flex", minHeight: "calc(100vh - 57px)" },
-    sidebar: { width: isMobile ? "100%" : 220, flexShrink: 0, borderRight: isMobile ? "none" : `1px solid ${BORDER}`, borderBottom: isMobile ? `1px solid ${BORDER}` : "none", padding: "12px 0", overflowY: "auto" },
-    sidebarTitle: { fontSize: 11, fontWeight: 700, color: T.muted, padding: "4px 16px 8px", letterSpacing: 1 },
-    rootBtn: (selected, isDragOver) => ({
-      display: "flex", alignItems: "center", gap: 6, padding: "7px 16px", cursor: "pointer",
-      fontSize: 13, width: "100%", textAlign: "left",
-      background: isDragOver ? "#fef3c7" : (selected ? "#f5f3ff" : "none"),
-      border: "1px solid transparent",
-      borderLeft: selected ? `3px solid ${PURPLE}` : "3px solid transparent",
-      color: selected ? PURPLE : T.fg, fontWeight: selected ? 700 : 400,
-    }),
-    addFolderBtn: { display: "flex", alignItems: "center", gap: 6, padding: "7px 16px", cursor: "pointer", fontSize: 12, color: T.muted, background: "none", border: "none", width: "100%", textAlign: "left" },
-    main: { flex: 1, padding: "16px 20px", overflow: "auto" },
-    breadcrumb: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: T.muted, marginBottom: 12, flexWrap: "wrap" },
-    bcLink: { cursor: "pointer", color: ACCENT, fontWeight: 500 },
-    toolbar: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 },
-    searchInput: { flex: 1, background: T.surface, border: `1px solid ${BORDER}`, borderRadius: 7, padding: "7px 11px", fontSize: 13, color: T.fg, fontFamily: "inherit", outline: "none" },
-    sortBtn: (active) => ({ background: active ? "#f1f5f9" : "none", border: `1px solid ${active ? "#94a3b8" : BORDER}`, borderRadius: 6, padding: "6px 11px", fontSize: 11, color: active ? "#374151" : T.muted, cursor: "pointer" }),
-    newFolderBtn: { background: "none", border: `1px solid ${BORDER}`, borderRadius: 6, padding: "6px 11px", fontSize: 11, color: FOLDER_COLOR, cursor: "pointer", whiteSpace: "nowrap" },
-    count: { fontSize: 12, color: T.muted, marginBottom: 10 },
-    subfolderGrid: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 },
-    subfolderCard: (isDragOver) => ({
-      display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8,
-      cursor: "pointer", fontSize: 13, fontWeight: 600, minWidth: 120,
-      background: isDragOver ? "#fef3c7" : T.surface,
-      border: `1px dashed ${isDragOver ? FOLDER_COLOR : BORDER}`,
-    }),
-    mapCard: (hovered) => ({ background: hovered ? "#f8fafc" : T.surface, border: `1px solid ${hovered ? "#94a3b8" : BORDER}`, borderRadius: 9, padding: "12px 16px", marginBottom: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", transition: "background 0.1s, border 0.1s", position: "relative" }),
-    mapTitle: { fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-    mapDate:  { fontSize: 11, color: T.muted, marginTop: 3 },
-    actionMenu: { position: "absolute", right: 8, top: "calc(100% + 4px)", background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", zIndex: 100, minWidth: 160, overflow: "hidden" },
-    empty: { textAlign: "center", color: T.muted, fontSize: 14, padding: "40px 20px", lineHeight: 1.9 },
-  };
-
   const folderNodeProps = {
     selectedFolderId, collapsed, setCollapsed,
-    editingFolderId, editingName, setEditingName,
-    dragOver,
-    onSelect: setSelectedFolderId,
-    onDragOver: handleDragOver,
-    onDragLeave: handleDragLeave,
-    onDrop: handleDrop,
-    onRename: handleRenameFolder,
-    onCommitRename: handleCommitRenameFolder,
-    onDelete: handleDeleteFolder,
+    editingFolderId, editingName, setEditingName, dragOver,
+    onSelect: selectFolder,
+    onDragOver: handleDragOver, onDragLeave: handleDragLeave, onDrop: handleDrop,
+    onRename: handleRenameFolder, onCommitRename: handleCommitRenameFolder, onDelete: handleDeleteFolder,
   };
 
   return (
-    <div style={s.wrap} onClick={() => setActionMenuMapId(null)}>
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.fg, fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif", display: "flex", flexDirection: "column" }}
+      onClick={() => setActionMenuMapId(null)}>
+
       {/* ヘッダー */}
-      <div style={s.header}>
-        <div style={s.appTitle}>Mind-Modeling</div>
-        <button style={s.headerBtn(PURPLE)} onClick={() => navigate("/import")}>Whimsical から移行</button>
-        <button style={s.headerBtn()} onClick={() => navigate("/templates")}>テンプレート</button>
-        <button style={s.createBtn} onClick={handleCreateMap} disabled={creating}>
+      <div style={{ padding: "12px 20px", borderBottom: `1px solid ${BORDER}`, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, flex: 1, color: T.fg }}>Mind-Modeling</div>
+        <button style={{ background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: PURPLE, cursor: "pointer" }} onClick={() => navigate("/import")}>移行</button>
+        <button style={{ background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: MUTED, cursor: "pointer" }} onClick={() => navigate("/templates")}>テンプレート</button>
+        <button style={{ background: ACCENT, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: creating ? "default" : "pointer", opacity: creating ? 0.6 : 1 }} onClick={handleCreateMap} disabled={creating}>
           {creating ? "作成中..." : "+ 新規マップ"}
         </button>
       </div>
 
-      <div style={s.layout}>
+      <div style={{ display: "flex", flex: 1 }}>
         {/* サイドバー */}
-        <div style={s.sidebar}>
-          <div style={s.sidebarTitle}>フォルダ</div>
+        <div style={{ width: 210, flexShrink: 0, borderRight: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", overflowY: "auto" }}>
+          <div style={{ padding: "10px 16px 4px", fontSize: 10, fontWeight: 700, color: MUTED, letterSpacing: 1 }}>フォルダ</div>
 
-          {/* ルート */}
-          <button
-            style={s.rootBtn(selectedFolderId === null, dragOver === "__root__")}
-            onClick={() => setSelectedFolderId(null)}
-            onDragOver={e => handleDragOver(e, "__root__")}
-            onDragLeave={handleDragLeave}
-            onDrop={e => handleDrop(e, null)}
-          >
-            <span style={{ width: 12 }} />
-            <span>🏠</span>
+          {/* すべてのマップ */}
+          <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px 6px 16px", cursor: "pointer", fontSize: 13, background: dragOver === "__root__" ? "#f0f9ff" : (selectedFolderId === null ? "#f5f3ff" : "transparent"), borderLeft: selectedFolderId === null ? `3px solid ${PURPLE}` : "3px solid transparent", color: selectedFolderId === null ? PURPLE : T.fg, fontWeight: selectedFolderId === null ? 600 : 400 }}
+            onClick={() => selectFolder(null)} onDragOver={e => handleDragOver(e, "__root__")} onDragLeave={handleDragLeave} onDrop={e => handleDrop(e, null)}>
+            <span style={{ width: 14, flexShrink: 0 }} />
             <span style={{ flex: 1 }}>すべてのマップ</span>
-            {tree.root_maps.length > 0 && <span style={{ fontSize: 11, color: T.muted }}>{tree.root_maps.length}</span>}
-          </button>
+            {tree.root_maps.length > 0 && <span style={{ fontSize: 11, color: MUTED, background: "#f1f5f9", borderRadius: 10, padding: "0 6px" }}>{tree.root_maps.length}</span>}
+          </div>
 
           {/* フォルダツリー */}
-          {!loading && folderTree.map(folder => (
-            <FolderNode key={folder.id} folder={folder} {...folderNodeProps} />
-          ))}
+          {!loading && folderTree.map(folder => <FolderNode key={folder.id} folder={folder} depth={0} {...folderNodeProps} />)}
 
-          <button style={s.addFolderBtn} onClick={handleCreateFolder}>
-            + フォルダを追加
+          {/* フォルダ追加 */}
+          <button style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 16px", cursor: "pointer", fontSize: 12, color: MUTED, background: "none", border: "none", width: "100%", textAlign: "left", marginTop: 4 }} onClick={handleCreateFolder}>
+            <span style={{ width: 14 }} />+ フォルダを追加
           </button>
         </div>
 
         {/* メインエリア */}
-        <div style={s.main}>
-          {/* パンくずナビ */}
-          {breadcrumbs.length > 0 && (
-            <div style={s.breadcrumb}>
-              <span style={s.bcLink} onClick={() => setSelectedFolderId(null)}>ホーム</span>
-              {breadcrumbs.map((crumb, i) => (
-                <span key={crumb.id}>
-                  <span style={{ color: T.muted }}> / </span>
-                  {i < breadcrumbs.length - 1
-                    ? <span style={s.bcLink} onClick={() => setSelectedFolderId(crumb.id)}>{crumb.name}</span>
-                    : <span style={{ color: T.fg, fontWeight: 600 }}>{crumb.name}</span>
-                  }
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* ツールバー */}
+          <div style={{ padding: "12px 20px 8px", borderBottom: `1px solid ${BORDER}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            {/* パンくず */}
+            <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: MUTED, flex: 1, overflow: "hidden" }}>
+              <span style={{ cursor: "pointer", color: selectedFolderId ? ACCENT : T.fg, fontWeight: !selectedFolderId ? 600 : 400 }} onClick={() => selectFolder(null)}>すべて</span>
+              {breadcrumbs.map((c, i) => (
+                <span key={c.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ color: MUTED }}>›</span>
+                  <span style={{ cursor: i < breadcrumbs.length - 1 ? "pointer" : "default", color: i < breadcrumbs.length - 1 ? ACCENT : T.fg, fontWeight: i === breadcrumbs.length - 1 ? 600 : 400, whiteSpace: "nowrap" }}
+                    onClick={() => i < breadcrumbs.length - 1 && selectFolder(c.id)}>{c.name}</span>
                 </span>
               ))}
             </div>
-          )}
-
-          {/* ツールバー */}
-          <div style={s.toolbar}>
-            <input style={s.searchInput} value={search} onChange={e => setSearch(e.target.value)} placeholder="マップ名で検索..." />
-            <button style={s.sortBtn(sort === "updated")} onClick={() => setSort("updated")}>更新日順</button>
-            <button style={s.sortBtn(sort === "title")}   onClick={() => setSort("title")}>名前順</button>
-            <button style={s.newFolderBtn} onClick={handleCreateFolder}>📁 追加</button>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="検索..." style={{ background: "#f8fafc", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "5px 10px", fontSize: 12, color: T.fg, fontFamily: "inherit", outline: "none", width: 160 }} />
+            <button style={{ background: sort === "updated" ? "#f1f5f9" : "none", border: `1px solid ${sort === "updated" ? "#94a3b8" : BORDER}`, borderRadius: 6, padding: "5px 10px", fontSize: 11, color: sort === "updated" ? "#374151" : MUTED, cursor: "pointer" }} onClick={() => setSort("updated")}>更新順</button>
+            <button style={{ background: sort === "title" ? "#f1f5f9" : "none", border: `1px solid ${sort === "title" ? "#94a3b8" : BORDER}`, borderRadius: 6, padding: "5px 10px", fontSize: 11, color: sort === "title" ? "#374151" : MUTED, cursor: "pointer" }} onClick={() => setSort("title")}>名前順</button>
+            <button style={{ background: "none", border: `1px solid ${BORDER}`, borderRadius: 6, padding: "5px 10px", fontSize: 11, color: PURPLE, cursor: "pointer" }} onClick={handleCreateFolder}>+ フォルダ</button>
           </div>
 
-          {/* サブフォルダ */}
-          {!search && currentSubFolders.length > 0 && (
-            <div style={s.subfolderGrid}>
-              {currentSubFolders.map(f => (
-                <div key={f.id}
-                  style={s.subfolderCard(dragOver === f.id)}
-                  onClick={() => setSelectedFolderId(f.id)}
-                  onDragOver={e => handleDragOver(e, f.id)}
-                  onDragLeave={handleDragLeave}
-                  onDrop={e => handleDrop(e, f.id)}
-                >
-                  <span>📁</span>
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
-                  <span style={{ fontSize: 11, color: T.muted }}>{f.maps?.length ?? 0}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
           {/* マップ一覧 */}
-          {loading ? (
-            <div style={s.empty}>読み込み中...</div>
-          ) : currentMaps.length === 0 ? (
-            <div style={s.empty}>
-              {search
-                ? `「${search}」に一致するマップがありません。`
-                : selectedFolderId
-                  ? "このフォルダにマップがありません。"
-                  : "マップがありません。「+ 新規マップ」で作成するか、「Whimsical から移行」で取り込んでください。"}
-            </div>
-          ) : (
-            <>
-              <div style={s.count}>{currentMaps.length}件</div>
-              {currentMaps.map(map => (
-                <div key={map.id}
-                  style={s.mapCard(hoveredMapId === map.id)}
-                  onClick={() => navigate(`/m/${map.id}`)}
-                  onMouseEnter={() => setHoveredMapId(map.id)}
-                  onMouseLeave={() => setHoveredMapId(null)}
-                  draggable
-                  onDragStart={e => handleDragStart(e, map.id)}
-                >
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={s.mapTitle}>{map.title || "Untitled"}</div>
-                    <div style={s.mapDate}>
-                      {new Date(map.updated_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-                    <div style={{ position: "relative" }}>
-                      <button
-                        onClick={e => { e.stopPropagation(); setActionMenuMapId(actionMenuMapId === map.id ? null : map.id); }}
-                        style={{ background: "none", border: `1px solid ${BORDER}`, borderRadius: 5, padding: "3px 8px", fontSize: 12, color: T.muted, cursor: "pointer" }}
-                      >•••</button>
-                      {actionMenuMapId === map.id && (
-                        <div style={s.actionMenu} onClick={e => e.stopPropagation()}>
-                          <FolderMoveMenu mapId={map.id} folders={tree.folders} currentFolderId={map.folder_id} onMove={handleMoveMapToFolder} />
-                          <button style={{ padding: "9px 16px", cursor: "pointer", fontSize: 13, color: DANGER, display: "block", width: "100%", textAlign: "left", background: "none", border: "none" }}
-                            onClick={e => handleDeleteMap(e, map.id)}>削除</button>
-                        </div>
-                      )}
-                    </div>
-                    <button style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14, padding: "4px 6px", opacity: 0.6 }} onClick={e => handleDeleteMap(e, map.id)} title="削除">✕</button>
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
+          <div style={{ flex: 1, overflowY: "auto", padding: "8px 20px 20px" }}>
+            {loading ? (
+              <div style={{ textAlign: "center", color: MUTED, padding: "40px 0", fontSize: 14 }}>読み込み中...</div>
+            ) : currentMaps.length === 0 ? (
+              <div style={{ textAlign: "center", color: MUTED, padding: "40px 0", fontSize: 14, lineHeight: 2 }}>
+                {search ? `「${search}」に一致するマップがありません` : "マップがありません"}
+              </div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: MUTED, fontSize: 11 }}>マップ名</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, color: MUTED, fontSize: 11, width: 60 }}>ノード</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, color: MUTED, fontSize: 11, width: 80 }}>更新</th>
+                    <th style={{ width: 32 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentMaps.map(map => (
+                    <MapRow key={map.id} map={map} folders={tree.folders}
+                      actionMenuMapId={actionMenuMapId} setActionMenuMapId={setActionMenuMapId}
+                      onOpen={() => navigate(`/m/${map.id}`)}
+                      onDelete={handleDeleteMap}
+                      onMove={handleMoveMapToFolder}
+                      onDragStart={handleDragStart} />
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* トースト */}
       {toast && (
-        <div style={{ position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "rgba(220,38,38,0.92)" : "rgba(22,163,74,0.92)", color: "#fff", borderRadius: 10, padding: "10px 22px", fontSize: 14, fontWeight: 600, zIndex: 9999, pointerEvents: "none", fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif", boxShadow: "0 4px 16px rgba(0,0,0,0.2)" }}>
+        <div style={{ position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "rgba(220,38,38,0.92)" : "rgba(22,163,74,0.92)", color: "#fff", borderRadius: 10, padding: "10px 22px", fontSize: 14, fontWeight: 600, zIndex: 9999, pointerEvents: "none" }}>
           {toast.msg}
         </div>
       )}
     </div>
+  );
+}
+
+// ─── MapRow（表形式の1行）────────────────────────────────────
+
+function MapRow({ map, folders, actionMenuMapId, setActionMenuMapId, onOpen, onDelete, onMove, onDragStart }) {
+  const [hovered, setHovered] = useState(false);
+  const isMenuOpen = actionMenuMapId === map.id;
+
+  return (
+    <tr style={{ borderBottom: `1px solid ${BORDER}`, background: hovered ? "#fafafa" : "transparent", cursor: "pointer", transition: "background 0.1s" }}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      onClick={onOpen} draggable onDragStart={e => onDragStart(e, map.id)}>
+      {/* マップ名 */}
+      <td style={{ padding: "9px 8px" }}>
+        <div style={{ fontWeight: 500, color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 480 }}>
+          {map.title || "Untitled"}
+        </div>
+      </td>
+      {/* ノード数 */}
+      <td style={{ padding: "9px 8px", textAlign: "right", color: MUTED, fontSize: 12 }}>
+        {map.node_count != null ? map.node_count : "—"}
+      </td>
+      {/* 更新時刻 */}
+      <td style={{ padding: "9px 8px", textAlign: "right", color: MUTED, fontSize: 12, whiteSpace: "nowrap" }}>
+        {relativeTime(map.updated_at)}
+      </td>
+      {/* アクションメニュー */}
+      <td style={{ padding: "9px 4px", position: "relative" }} onClick={e => e.stopPropagation()}>
+        <button style={{ background: "none", border: "none", color: MUTED, cursor: "pointer", fontSize: 14, padding: "0 6px", opacity: hovered || isMenuOpen ? 1 : 0, transition: "opacity 0.1s" }}
+          onClick={e => { e.stopPropagation(); setActionMenuMapId(isMenuOpen ? null : map.id); }}>···</button>
+        {isMenuOpen && (
+          <div style={{ position: "absolute", right: 0, top: "100%", background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", zIndex: 100, minWidth: 160, overflow: "hidden" }} onClick={e => e.stopPropagation()}>
+            <div style={{ padding: "6px 14px 4px", fontSize: 10, color: MUTED, fontWeight: 700, borderBottom: `1px solid ${BORDER}` }}>フォルダへ移動</div>
+            <button style={{ padding: "7px 14px", cursor: "pointer", fontSize: 12, color: !map.folder_id ? "#a855f7" : "#374151", display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: `1px solid ${BORDER}` }} onClick={() => onMove(map.id, null)}>
+              ルート{!map.folder_id ? " ✓" : ""}
+            </button>
+            {folders.map(f => (
+              <button key={f.id} style={{ padding: "7px 14px", cursor: "pointer", fontSize: 12, color: map.folder_id === f.id ? "#a855f7" : "#374151", display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: `1px solid ${BORDER}` }} onClick={() => onMove(map.id, f.id)}>
+                {f.name}{map.folder_id === f.id ? " ✓" : ""}
+              </button>
+            ))}
+            <button style={{ padding: "8px 14px", cursor: "pointer", fontSize: 12, color: DANGER, display: "block", width: "100%", textAlign: "left", background: "none", border: "none" }} onClick={e => onDelete(e, map.id)}>
+              削除
+            </button>
+          </div>
+        )}
+      </td>
+    </tr>
   );
 }
