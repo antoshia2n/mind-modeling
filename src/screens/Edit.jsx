@@ -68,6 +68,7 @@ export default function Edit({ mapId }) {
     if (!uid || !mapId) return;
     Promise.all([getMap(mapId), getNodes(mapId), getMaps(uid)]).then(async ([m, ns, ms]) => {
       setMap(m);
+      document.title = m?.title ? `${m.title} | Mind-Modeling` : "Mind-Modeling";
       setAllMaps(ms.filter(x => x.id !== mapId));
       setZeusLastSync(m?.last_synced_at ?? null);
       if (ns.length === 0) {
@@ -76,12 +77,14 @@ export default function Edit({ mapId }) {
       } else { setNodes(ns); }
       setLoading(false);
     });
+    return () => { document.title = "Mind-Modeling"; }; // 離脱時にリセット
   }, [uid, mapId]);
 
   function showToast(msg, type = "success") { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); }
 
   function handleTitleChange(e) { setMap(prev => ({ ...prev, title: e.target.value })); }
   async function handleTitleBlur(e) {
+    document.title = `${e.target.value} | Mind-Modeling`; // タイトル変更時も即反映
     setSaveState("saving");
     await updateMap(mapId, { title: e.target.value });
     setSaveState("saved");
