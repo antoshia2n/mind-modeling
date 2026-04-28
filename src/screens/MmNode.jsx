@@ -137,7 +137,7 @@ export default function MmNode({ data, selected }) {
         <textarea ref={inputRef} value={draft} onChange={e => { autoResize(e.target); setDraft(e.target.value); }} onBlur={commitEdit} onKeyDown={handleKeyDown} rows={1}
           style={{ fontSize: 14, ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"), fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif", background: "none", border: "none", outline: "none", padding: 0, minWidth: 60, resize: "none", overflow: "hidden" }} />
       ) : (
-        <span style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: "nowrap", ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"), fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif" }}>
+        <span style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: "normal", wordBreak: "break-word", maxWidth: 200, ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"), fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif" }}>
           {data.label || <span style={{ color: "#9ca3af", fontStyle: "italic", fontWeight: 400 }}>新しいノード</span>}
         </span>
       )}
