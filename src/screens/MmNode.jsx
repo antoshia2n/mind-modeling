@@ -5,8 +5,15 @@ import { T } from "shia2n-core";
 const PURPLE = "#a855f7";
 const GRAY   = "#d1d5db";
 const TEAL   = "#0ea5e9";
+const AMBER  = "#f59e0b";
 
 const FOCUS_EVENT = "mm-focus-node";
+
+const URL_RE = /^https?:\/\/[^\s]+$/;
+function isUrl(text) { return URL_RE.test(text?.trim() ?? ""); }
+function getDomain(url) {
+  try { return new URL(url.trim()).hostname.replace(/^www\./, ""); } catch { return url; }
+}
 
 export default function MmNode({ data, selected }) {
   const [editing, setEditing] = useState(false);
@@ -34,28 +41,33 @@ export default function MmNode({ data, selected }) {
 
   function autoResize(el) { if (!el) return; el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
   function startEdit() { if (!editing) { setEditing(true); data.onEditStart?.(); } }
-  function commitEdit() { setEditing(false); data.onEditEnd?.(); const t = draft.trim(); if (t !== (data.label ?? "")) data.onContentChange?.(t); }
+  function commitEdit() {
+    setEditing(false); data.onEditEnd?.();
+    const t = draft.trim();
+    if (t !== (data.label ?? "")) data.onContentChange?.(t);
+  }
   function handleKeyDown(e) {
     if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); commitEdit(); return; }
     if (e.key === "Escape") { e.stopPropagation(); setDraft(data.label ?? ""); setEditing(false); data.onEditEnd?.(); }
   }
 
-  const dir       = data.direction ?? "right";
-  const isLeft    = dir === "left";
-  const isTb      = dir === "down" || data.layoutMode === "tb";
-  const isDropTgt = data.isDropTarget;
+  const dir          = data.direction ?? "right";
+  const isLeft       = dir === "left";
+  const isTb         = dir === "down" || data.layoutMode === "tb";
+  const isDropTgt    = data.isDropTarget;
   const showCollapse = (hovered || selected) && !editing && data.hasChildren;
   const showActions  = selected && !editing && !isDropTgt;
-  const hasPdf   = !!data.pdfUrl;
-  const hasLink  = !!data.linkedMapId;
+  const hasPdf       = !!data.pdfUrl;
+  const hasMapLink   = !!data.linkedMapId;
+  const hasLinkUrl   = !!data.linkUrl;
+  const contentIsUrl = isUrl(data.label);
 
   const textStyle = {
     fontWeight: data.bold ? 700 : undefined, fontStyle: data.italic ? "italic" : "normal",
     textDecoration: data.strikethrough ? "line-through" : "none", color: data.textColor || undefined,
   };
 
-  // ─── 共通 Handle（全て不可視）─────────────────────────────
   const handleLR = <>
     <Handle id="tl" type="target" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
     <Handle id="tr" type="target" position={Position.Right} style={{ opacity: 0, pointerEvents: "none" }} />
@@ -73,22 +85,21 @@ export default function MmNode({ data, selected }) {
     const border = isDropTgt ? "2px solid #10b981" : `1.5px solid ${selected ? PURPLE : "#e2e8f0"}`;
     return (
       <div onDoubleClick={startEdit} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
-        style={{ background: isDropTgt ? "#f0fdf4" : bg, border, borderRadius: 10, padding: "10px 18px", minWidth: 80, maxWidth: editing ? 480 : 300, boxShadow: isDropTgt ? "0 0 0 3px #10b98140" : "0 2px 8px rgba(0,0,0,0.07)", cursor: "default", userSelect: "none", position: "relative" }}>
+        style={{ background: isDropTgt ? "#f0fdf4" : bg, border, borderRadius: 10, padding: "10px 18px", minWidth: 80, maxWidth: editing ? 480 : 300, boxShadow: "0 2px 8px rgba(0,0,0,0.07)", cursor: "default", userSelect: "none", position: "relative" }}>
         {isDropTgt && <DropLabel />}
         {handleLR}
         <Handle id="sl" type="source" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
         <Handle id="sr" type="source" position={Position.Right} style={{ opacity: 0, pointerEvents: "none" }} />
         {isTb && <Handle id="sb" type="source" position={Position.Bottom} style={{ opacity: 0, pointerEvents: "none" }} />}
-        {showActions && <FormatToolbar data={data} hasPdf={hasPdf} />}
+        {showActions && <FormatToolbar data={data} hasPdf={hasPdf} hasLinkUrl={hasLinkUrl} />}
         {editing ? (
           <textarea ref={inputRef} value={draft} onChange={e => { autoResize(e.target); setDraft(e.target.value); }} onBlur={commitEdit} onKeyDown={handleKeyDown} rows={1}
             style={{ fontSize: 16, fontWeight: data.bold ? 700 : 600, fontStyle: data.italic ? "italic" : "normal", textDecoration: data.strikethrough ? "line-through" : "none", color: data.textColor || "#374151", fontFamily: "inherit", background: "none", border: "none", outline: "none", padding: 0, width: "100%", resize: "none", overflow: "hidden", display: "block" }} />
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 16, lineHeight: 1.5, ...textStyle, fontWeight: data.bold ? 700 : 600, color: data.textColor || "#374151" }}>
-              {data.label || <span style={{ color: "#9ca3af", fontWeight: 400 }}>新しいノード</span>}
-            </span>
-            {hasPdf && <PdfBadge onClick={e => { e.stopPropagation(); data.onOpenSlideshow?.(); }} />}
+            <NodeLabel label={data.label} urlFlag={contentIsUrl} baseStyle={{ ...textStyle, fontWeight: data.bold ? 700 : 600, color: data.textColor || "#374151", fontSize: 16 }} maxWidth={260} />
+            {hasPdf    && <PdfBadge  onClick={e => { e.stopPropagation(); data.onOpenSlideshow?.(); }} />}
+            {hasLinkUrl && <LinkBadge url={data.linkUrl} />}
           </div>
         )}
         {showActions && !isTb && <QuickBtn posStyle={{ right: -36, top: "50%", transform: "translateY(-50%)" }} title="子ノードを追加 (Tab)" onClick={e => { e.stopPropagation(); data.onAddChild?.(); }}>›</QuickBtn>}
@@ -118,7 +129,7 @@ export default function MmNode({ data, selected }) {
       {isDropTgt && <DropLabel />}
       {handleLR}
       {handleTB}
-      {showActions && <FormatToolbar data={data} hasPdf={hasPdf} />}
+      {showActions && <FormatToolbar data={data} hasPdf={hasPdf} hasLinkUrl={hasLinkUrl} />}
 
       {showCollapse && (
         <button title={data.collapsed ? "展開" : "折りたたむ"} onClick={e => { e.stopPropagation(); data.onToggleCollapse?.(); }} style={collapseStyle}>
@@ -130,19 +141,14 @@ export default function MmNode({ data, selected }) {
         <textarea ref={inputRef} value={draft} onChange={e => { autoResize(e.target); setDraft(e.target.value); }} onBlur={commitEdit} onKeyDown={handleKeyDown} rows={1}
           style={{ fontSize: 14, ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"), fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif", background: "none", border: "none", outline: "none", padding: 0, minWidth: 60, resize: "none", overflow: "hidden" }} />
       ) : (
-        /* nowrap + ellipsis でレイアウトを崩さない */
-        <span style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220, display: "block", ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"), fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif" }}>
-          {data.label || <span style={{ color: "#9ca3af", fontStyle: "italic", fontWeight: 400 }}>新しいノード</span>}
-        </span>
+        <NodeLabel label={data.label} urlFlag={contentIsUrl} baseStyle={{ ...textStyle, fontWeight: data.bold ? 700 : 500, color: data.textColor || (T.fg ?? "#374151"), fontSize: 14 }} maxWidth={220} />
       )}
 
-      {/* PDF バッジ：絵文字なしフラットスタイル */}
-      {hasPdf && <PdfBadge onClick={e => { e.stopPropagation(); data.onOpenSlideshow?.(); }} />}
-
-      {/* マップリンク：絵文字なし */}
-      {hasLink && (
+      {hasPdf     && <PdfBadge  onClick={e => { e.stopPropagation(); data.onOpenSlideshow?.(); }} />}
+      {hasLinkUrl && <LinkBadge url={data.linkUrl} />}
+      {hasMapLink && (
         <span title="リンク先マップを開く" onClick={e => { e.stopPropagation(); data.onNavigateLink?.(); }}
-          style={{ fontSize: 10, cursor: "pointer", color: TEAL, flexShrink: 0, fontWeight: 700, letterSpacing: -0.5 }}>↗</span>
+          style={{ fontSize: 10, cursor: "pointer", color: TEAL, flexShrink: 0, fontWeight: 700 }}>↗</span>
       )}
 
       {showActions && (
@@ -164,7 +170,24 @@ export default function MmNode({ data, selected }) {
   );
 }
 
-// ─── フラットな PDF バッジ ────────────────────────────────
+// ─── NodeLabel ────────────────────────────────────────────────
+
+function NodeLabel({ label, urlFlag, baseStyle, maxWidth }) {
+  const font = { fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif", lineHeight: 1.5 };
+  if (urlFlag && label) {
+    return (
+      <a href={label.trim()} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title={label.trim()}
+        style={{ ...font, ...baseStyle, color: "#3b82f6", textDecoration: "underline", textUnderlineOffset: 2, maxWidth, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", cursor: "pointer" }}>
+        {getDomain(label)}
+      </a>
+    );
+  }
+  return (
+    <span style={{ ...font, ...baseStyle, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth, display: "block" }}>
+      {label || <span style={{ color: "#9ca3af", fontStyle: "italic", fontWeight: 400 }}>新しいノード</span>}
+    </span>
+  );
+}
 
 function PdfBadge({ onClick }) {
   const [h, setH] = useState(false);
@@ -176,36 +199,46 @@ function PdfBadge({ onClick }) {
   );
 }
 
-function DropLabel() {
-  return <div style={{ position: "absolute", top: -22, left: "50%", transform: "translateX(-50%)", background: "#10b981", color: "#fff", borderRadius: 5, padding: "1px 7px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", pointerEvents: "none", zIndex: 100, fontFamily: "'Hiragino Sans','Noto Sans JP','YuGothic',sans-serif" }}>ここへ移動</div>;
+function LinkBadge({ url }) {
+  const [h, setH] = useState(false);
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title={url}
+      onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
+      style={{ fontSize: 9, fontWeight: 700, cursor: "pointer", flexShrink: 0, lineHeight: 1, textDecoration: "none", color: h ? "#fff" : AMBER, background: h ? AMBER : "rgba(245,158,11,0.1)", border: `1px solid rgba(245,158,11,0.3)`, borderRadius: 3, padding: "1px 5px", letterSpacing: 0.3, transition: "all 0.1s" }}>
+      URL
+    </a>
+  );
 }
 
-// ─── フォーマットツールバー ───────────────────────────────
+function DropLabel() {
+  return <div style={{ position: "absolute", top: -22, left: "50%", transform: "translateX(-50%)", background: "#10b981", color: "#fff", borderRadius: 5, padding: "1px 7px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", pointerEvents: "none", zIndex: 100 }}>ここへ移動</div>;
+}
 
-function FormatToolbar({ data, hasPdf }) {
+function FormatToolbar({ data, hasPdf, hasLinkUrl }) {
   return (
     <div onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
       style={{ position: "absolute", bottom: "calc(100% + 10px)", left: "50%", transform: "translateX(-50%)", background: "#1e293b", borderRadius: 10, padding: "5px 8px", display: "flex", alignItems: "center", gap: 2, boxShadow: "0 4px 20px rgba(0,0,0,0.25)", zIndex: 1000, whiteSpace: "nowrap" }}>
-      <ToolBtn active={data.bold}          title="太字 (B)" onClick={() => data.onToggleBold?.()}><b style={{ fontSize: 12 }}>B</b></ToolBtn>
-      <ToolBtn active={data.italic}        title="斜体 (I)" onClick={() => data.onToggleItalic?.()}><i style={{ fontSize: 12 }}>I</i></ToolBtn>
+      <ToolBtn active={data.bold}          title="太字" onClick={() => data.onToggleBold?.()}><b style={{ fontSize: 12 }}>B</b></ToolBtn>
+      <ToolBtn active={data.italic}        title="斜体" onClick={() => data.onToggleItalic?.()}><i style={{ fontSize: 12 }}>I</i></ToolBtn>
       <ToolBtn active={data.strikethrough} title="取り消し線" onClick={() => data.onToggleStrikethrough?.()}><span style={{ textDecoration: "line-through", fontSize: 12 }}>S</span></ToolBtn>
       <Sep />
       <ColorGroup title="文字色" value={data.textColor || "#374151"} hasValue={!!data.textColor}
-        indicator={<div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:1 }}><span style={{ color:"#fff", fontWeight:700, fontSize:12, lineHeight:1 }}>A</span><div style={{ width:14, height:2, borderRadius:1, background: data.textColor || "#fff" }} /></div>}
+        indicator={<div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:1 }}><span style={{ color:"#fff", fontWeight:700, fontSize:12 }}>A</span><div style={{ width:14, height:2, borderRadius:1, background: data.textColor || "#fff" }} /></div>}
         onChange={c => data.onTextColorChange?.(c)} onReset={() => data.onTextColorChange?.(null)} />
       <ColorGroup title="背景色" value={data.nodeColor || "#ffffff"} hasValue={!!data.nodeColor}
         indicator={<div style={{ width:13, height:13, borderRadius:3, background: data.nodeColor || "#e2e8f0", border:"1.5px solid rgba(255,255,255,0.2)" }} />}
         onChange={c => data.onNodeColorChange?.(c)} onReset={() => data.onNodeColorChange?.(null)} />
       <Sep />
-      {/* テンプレ・マップリンク */}
       <ToolBtn title="テンプレートを挿入" onClick={() => data.onInsertTemplate?.()}>
         <span style={{ fontSize: 11, color: "#5eead4", fontWeight: 700 }}>+T</span>
       </ToolBtn>
-      <ToolBtn active={!!data.linkedMapId} title="マップリンク" onClick={() => data.onMapLink?.()}>
+      <ToolBtn active={!!data.linkedMapId} title="別マップにリンク" onClick={() => data.onMapLink?.()}>
         <span style={{ fontSize: 12, color: "#7dd3fc" }}>↗</span>
       </ToolBtn>
+      <ToolBtn active={hasLinkUrl} title={hasLinkUrl ? `URL: ${data.linkUrl}` : "URLリンクを設定"} onClick={() => data.onSetLinkUrl?.()}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: hasLinkUrl ? AMBER : "#94a3b8" }}>URL</span>
+      </ToolBtn>
       <Sep />
-      {/* PDF操作：絵文字なし */}
       {hasPdf ? <>
         <ToolBtn title="スライドショーで開く" onClick={() => data.onOpenSlideshow?.()}>
           <span style={{ fontSize: 10, fontWeight: 700, color: "#c4b5fd" }}>▶ PDF</span>
@@ -217,7 +250,7 @@ function FormatToolbar({ data, hasPdf }) {
           <span style={{ fontSize: 10, color: "#ef4444", fontWeight: 700 }}>× PDF</span>
         </ToolBtn>
       </> : (
-        <ToolBtn title="PDFを添付してスライドショーで使う" onClick={() => data.onUploadPdf?.()}>
+        <ToolBtn title="PDFを添付" onClick={() => data.onUploadPdf?.()}>
           <span style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8" }}>+ PDF</span>
         </ToolBtn>
       )}

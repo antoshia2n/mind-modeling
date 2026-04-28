@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import {
   ReactFlow, Background, Controls, BackgroundVariant,
-  useNodesState, useEdgesState, Position, useReactFlow, BaseEdge,
+  useNodesState, useEdgesState, Position, useReactFlow, BaseEdge, useViewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { createNode, updateNode, deleteNode, restoreNode, uploadPdf, deletePdf } from "../lib/supabase.js";
@@ -11,33 +11,116 @@ import MmNode from "./MmNode.jsx";
 
 // ─── Whimsical 風カスタムエッジ ─────────────────────────────
 
-/**
- * Whimsical 正解エッジ：S字ベジェ
- * - 両端が水平接線になる Cubic Bezier
- * - 制御点距離 = 水平距離の50%
- * - これが Whimsical のエッジ公式
- */
 function WmEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, style }) {
   const isVertical = sourcePosition === Position.Bottom || sourcePosition === Position.Top;
   let d;
-
   if (isVertical) {
-    // 上下モード：垂直S字ベジェ
     const dy = Math.abs(targetY - sourceY);
     const cp = Math.max(24, dy * 0.5);
     d = `M ${sourceX},${sourceY} C ${sourceX},${sourceY + cp} ${targetX},${targetY - cp} ${targetX},${targetY}`;
   } else {
-    // 左右モード：水平S字ベジェ（Whimsical正解）
     const isLeft = sourcePosition === Position.Left;
-    const dx     = Math.abs(targetX - sourceX);
-    const cp     = Math.max(20, dx * 0.5);
-    if (isLeft) {
-      d = `M ${sourceX},${sourceY} C ${sourceX - cp},${sourceY} ${targetX + cp},${targetY} ${targetX},${targetY}`;
-    } else {
-      d = `M ${sourceX},${sourceY} C ${sourceX + cp},${sourceY} ${targetX - cp},${targetY} ${targetX},${targetY}`;
-    }
+    const dx = Math.abs(targetX - sourceX);
+    const cp = Math.max(20, dx * 0.5);
+    d = isLeft
+      ? `M ${sourceX},${sourceY} C ${sourceX - cp},${sourceY} ${targetX + cp},${targetY} ${targetX},${targetY}`
+      : `M ${sourceX},${sourceY} C ${sourceX + cp},${sourceY} ${targetX - cp},${targetY} ${targetX},${targetY}`;
   }
   return <BaseEdge id={id} path={d} style={style} />;
+}
+
+// ─── 挿入ライン（Zone-based ドラッグ のビジュアルフィードバック）
+
+function InsertionLineOverlay({ hint }) {
+  const { x: vx, y: vy, zoom } = useViewport();
+  if (!hint) return null;
+
+  const sx  = hint.lineX * zoom + vx;
+  const sy  = hint.lineY * zoom + vy;
+  const sw  = Math.max(24, hint.lineW * zoom);
+  const DOT = 8;
+
+  const lineStyle = {
+    position: "absolute", left: sx, top: sy,
+    transform: "translateY(-50%)",
+    display: "flex", alignItems: "center",
+    pointerEvents: "none", zIndex: 200,
+  };
+
+  if (hint.type === "firstChild") {
+    // 子挿入：L字インジケーター
+    return (
+      <div style={{ position: "absolute", left: sx, top: sy, pointerEvents: "none", zIndex: 200 }}>
+        <div style={{ width: DOT, height: DOT, borderRadius: "50%", background: "#a855f7", position: "absolute", top: -DOT / 2, left: 0 }} />
+        <div style={{ width: sw, height: 2, background: "#a855f7", borderRadius: 1 }} />
+        <div style={{ position: "absolute", right: 0, top: -DOT / 2, width: DOT, height: DOT, borderRadius: "50%", background: "#a855f7", opacity: 0.5 }} />
+      </div>
+    );
+  }
+
+  // 兄弟挿入：水平ライン + 左端ドット
+  return (
+    <div style={lineStyle}>
+      <div style={{ width: DOT, height: DOT, borderRadius: "50%", background: "#a855f7", flexShrink: 0 }} />
+      <div style={{ width: sw, height: 2, background: "#a855f7", borderRadius: "0 1px 1px 0", marginLeft: -1 }} />
+    </div>
+  );
+}
+
+// ─── Zone-based ドラッグ: 挿入ゾーン検出 ─────────────────────
+// ノードの上半・下半・右側に入ったとき、それぞれ
+//   before / after / firstChild を返す
+
+const CHILD_ZONE_W  = 80;   // ノード右端からの子挿入ゾーン幅
+const DETECT_RADIUS = 80;   // 検出最大距離（canvas px）
+
+function findInsertZone(dragged, allRfNodes, nodes) {
+  const dw  = dragged.measured?.width  ?? 100;
+  const dh  = dragged.measured?.height ?? 28;
+  const dcx = dragged.position.x + dw / 2;
+  const dcy = dragged.position.y + dh / 2;
+
+  let best = null;
+  let bestScore = DETECT_RADIUS;
+
+  for (const rfn of allRfNodes) {
+    if (rfn.id === dragged.id || rfn.hidden) continue;
+
+    const nw = rfn.measured?.width  ?? 100;
+    const nh = rfn.measured?.height ?? 28;
+    const nx = rfn.position.x;
+    const ny = rfn.position.y;
+    const ncx = nx + nw / 2;
+
+    // 水平方向が近いノードのみ対象
+    if (Math.abs(dcx - ncx) > nw + CHILD_ZONE_W + 40) continue;
+
+    // ─ 子挿入ゾーン（ノード右端から CHILD_ZONE_W 以内）
+    const rightEdge = nx + nw;
+    if (dragged.position.x > rightEdge - 20 && dragged.position.x < rightEdge + CHILD_ZONE_W) {
+      const dist = Math.hypot(dragged.position.x - rightEdge, dcy - (ny + nh / 2));
+      if (dist < bestScore) {
+        bestScore = dist;
+        best = { type: "firstChild", targetNodeId: rfn.id, lineX: rightEdge + 6, lineY: ny + nh / 2, lineW: 40 };
+      }
+    }
+
+    // ─ 上ゾーン（ノードの上端付近 → before）
+    const topDist = Math.abs(dcy - ny);
+    if (topDist < bestScore && Math.abs(dcx - ncx) < nw + 30) {
+      bestScore = topDist;
+      best = { type: "before", targetNodeId: rfn.id, lineX: nx - 4, lineY: ny - 2, lineW: nw + 8 };
+    }
+
+    // ─ 下ゾーン（ノードの下端付近 → after）
+    const botDist = Math.abs(dcy - (ny + nh));
+    if (botDist < bestScore && Math.abs(dcx - ncx) < nw + 30) {
+      bestScore = botDist;
+      best = { type: "after", targetNodeId: rfn.id, lineX: nx - 4, lineY: ny + nh + 2, lineW: nw + 8 };
+    }
+  }
+
+  return best;
 }
 
 const nodeTypes = { mmNode: MmNode };
@@ -83,7 +166,7 @@ function findDropTarget(dragged, allRfNodes, excludeIds) {
  * - 変更されたノード → updateNode
  */
 async function applySnapshot(targetNodes, currentNodes) {
-  const FIELDS = ['content','parent_id','order_index','collapsed','bold','italic','strikethrough','text_color','node_color','linked_map_id','pdf_url','pdf_filename'];
+  const FIELDS = ['content','parent_id','order_index','collapsed','bold','italic','strikethrough','text_color','node_color','linked_map_id','pdf_url','pdf_filename','link_url'];
   const curMap = new Map(currentNodes.map(n => [n.id, n]));
   const tgtMap = new Map(targetNodes.map(n => [n.id, n]));
 
@@ -142,12 +225,12 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
 
   const [rfNodes, setRfNodes, onRfNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges, onRfEdgesChange] = useEdgesState([]);
-  const [selectedId,   setSelectedId]   = useState(null);
-  const [selectedIds,  setSelectedIds]  = useState(new Set());
-  const [editingId,    setEditingId]    = useState(null);
-  const [dropTargetId, setDropTargetId] = useState(null);
-  const [toastMsg,     setToastMsg]     = useState(null);
-  const [toastType,    setToastType]    = useState("info");
+  const [selectedId,  setSelectedId]  = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [editingId,   setEditingId]   = useState(null);
+  const [insertHint,  setInsertHint]  = useState(null); // zone-based ドラッグの挿入ヒント
+  const [toastMsg,    setToastMsg]    = useState(null);
+  const [toastType,   setToastType]   = useState("info");
 
   function showToast(msg, type = "info") {
     setToastMsg(msg); setToastType(type);
@@ -437,10 +520,11 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
           hasRightChildren: isRoot && !isTb && nodes.some(c => c.parent_id === n.id && directions[c.id] === "right"),
           hasLeftChildren:  isRoot && !isTb && nodes.some(c => c.parent_id === n.id && directions[c.id] === "left"),
           isRoot, direction: dir, layoutMode,
-          isDropTarget: n.id === dropTargetId,
+          isDropTarget: false, // zone-based に変更のため常に false
           bold: n.bold, italic: n.italic, strikethrough: n.strikethrough,
           textColor: n.text_color, nodeColor: n.node_color,
           linkedMapId: n.linked_map_id ?? null,
+          linkUrl:     n.link_url       ?? null,
           pdfUrl: n.pdf_url ?? null, pdfFilename: n.pdf_filename ?? null,
           onContentChange:       (v)  => handleContentChange(n.id, v),
           onToggleCollapse:      ()   => toggleCollapse(n.id),
@@ -455,6 +539,16 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
           onInsertTemplate:      ()   => onRequestTemplateInsert?.(n.id),
           onMapLink:             ()   => onRequestMapLink?.(n.id, n.linked_map_id),
           onNavigateLink:        ()   => { if (n.linked_map_id) navigate(`/m/${n.linked_map_id}`); },
+          onSetLinkUrl: () => {
+            const current = nodesRef.current.find(nd => nd.id === n.id)?.link_url ?? "";
+            const raw = window.prompt("URLを入力（空白で削除）:", current);
+            if (raw === null) return;
+            const cleaned = raw.trim();
+            const finalUrl = cleaned === "" ? null : (cleaned.startsWith("http") ? cleaned : `https://${cleaned}`);
+            updateNode(n.id, { link_url: finalUrl });
+            onNodesChange(nodesRef.current.map(nd => nd.id === n.id ? { ...nd, link_url: finalUrl } : nd));
+            onSaved();
+          },
           onUploadPdf:           ()   => handleUploadPdfClick(n.id),
           onDeletePdf:           ()   => handleDeletePdf(n.id),
           onOpenSlideshow:       ()   => handleOpenSlideshow(n.id),
@@ -471,7 +565,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       const tgtHandle = isTb ? "tt" : (isLeft ? "tr" : "tl");
       return { id: `e-${n.parent_id}-${n.id}`, source: n.parent_id, target: n.id, sourceHandle: srcHandle, targetHandle: tgtHandle, type: "wmEdge", style: EDGE_STYLE, hidden: hiddenIds.has(n.id) };
     }));
-  // deps は nodes と layoutMode のみ。selectedIds / dropTargetId は別 useEffect で処理。
+  // deps は nodes と layoutMode のみ。insertHint は別途管理。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, layoutMode]);
 
@@ -484,15 +578,6 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       data: { ...n.data, isSelected: selectedIds.has(n.id) },
     })));
   }, [selectedIds]);
-
-  // ─── 軽量：ドロップターゲットの更新（ドラッグ中に全再構築しない）
-
-  useEffect(() => {
-    setRfNodes(prev => prev.map(n => ({
-      ...n,
-      data: { ...n.data, isDropTarget: n.id === dropTargetId },
-    })));
-  }, [dropTargetId]);
 
   // ─── 2パス目：実測幅で再配置（重なり解消）─────────────────
   // react-flow がノードを描画・計測した後に rfNodes.measured.width が入る。
@@ -525,52 +610,101 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     setTimeout(() => fitView({ padding: 0.35, duration: 200 }), 80);
   }, [rfNodes]); // rfNodesが更新されるたびにチェック（measured.widthが入るまで）
 
-  // ─── ドラッグ ────────────────────────────────────────────
+  // ─── Zone-based ドラッグ ─────────────────────────────────
+  // ノードのハイライトではなく「空間ゾーン」で挿入位置を決定する。
+  // 挿入ラインが視覚的フィードバック（InsertionLineOverlay）。
+
+  const insertHintRef = useRef(null); // setInsertHint と同期して使う
 
   const handleNodeDrag = useCallback((event, draggedNode) => {
-    const allRfNodes  = getNodes();
-    const draggingIds = selectedIds.size > 1 ? selectedIds : new Set([draggedNode.id]);
-    const ns = nodesRef.current;
-    const target = findDropTarget(draggedNode, allRfNodes, draggingIds);
-    const descs  = new Set(getDescendantIds(draggedNode.id, ns));
-    const valid  = target && !descs.has(target.id) ? target.id : null;
-    if (valid !== dropTargetId) setDropTargetId(valid);
-  }, [getNodes, selectedIds, dropTargetId]);
+    const allRfNodes = getNodes();
+    const hint = findInsertZone(draggedNode, allRfNodes, nodesRef.current);
+
+    // 子孫ノードへの挿入は禁止
+    if (hint) {
+      const descs = new Set(getDescendantIds(draggedNode.id, nodesRef.current));
+      if (descs.has(hint.targetNodeId)) {
+        insertHintRef.current = null;
+        setInsertHint(null);
+        return;
+      }
+    }
+
+    insertHintRef.current = hint;
+    setInsertHint(hint);
+  }, [getNodes]);
 
   const handleNodeDragStop = useCallback(async (event, draggedNode) => {
-    setDropTargetId(null);
-    const allRfNodes  = getNodes();
-    const draggingIds = selectedIds.size > 1 ? selectedIds : new Set([draggedNode.id]);
+    const hint = insertHintRef.current;
+    insertHintRef.current = null;
+    setInsertHint(null);
+
     const ns = nodesRef.current;
-    const target = findDropTarget(draggedNode, allRfNodes, draggingIds);
-    if (!target) {
+
+    // ヒントなし → 元の位置にスナップ
+    if (!hint) {
       const { positions } = calcLayout(ns, layoutMode);
-      setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position }))); return;
+      setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position })));
+      return;
     }
-    const allDescs = new Set();
-    for (const id of draggingIds) for (const d of getDescendantIds(id, ns)) allDescs.add(d);
-    if (allDescs.has(target.id)) {
-      showToast("子孫ノードには移動できません", "error");
-      const { positions } = calcLayout(ns, layoutMode);
-      setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position }))); return;
-    }
-    const toMove = [...draggingIds].filter(id => {
-      const nd = ns.find(n => n.id === id); if (!nd) return false;
-      let cur = nd;
-      while (cur.parent_id) { if (draggingIds.has(cur.parent_id)) return false; cur = ns.find(n => n.id === cur.parent_id) ?? { parent_id: null }; }
-      return true;
-    });
+
+    const targetNode  = ns.find(n => n.id === hint.targetNodeId);
+    const draggedData = ns.find(n => n.id === draggedNode.id);
+    if (!targetNode || !draggedData) return;
+
     saveHistory();
-    let updated = [...ns];
-    for (const nodeId of toMove) {
-      const sib = updated.filter(n => n.parent_id === target.id);
-      const newOrder = sib.length > 0 ? Math.max(...sib.map(n => n.order_index)) + 1024 : 1024;
-      await updateNode(nodeId, { parent_id: target.id, order_index: newOrder });
-      updated = updated.map(n => n.id === nodeId ? { ...n, parent_id: target.id, order_index: newOrder } : n);
+
+    if (hint.type === "firstChild") {
+      // ─ 子として挿入（ターゲットの最初の子に）
+      const children = ns
+        .filter(n => n.parent_id === targetNode.id)
+        .sort((a, b) => a.order_index - b.order_index);
+      const newOrder = children.length > 0
+        ? Math.max(1, children[0].order_index - 512)
+        : 1024;
+      await updateNode(draggedNode.id, { parent_id: targetNode.id, order_index: newOrder });
+      onNodesChange(ns.map(n =>
+        n.id === draggedNode.id ? { ...n, parent_id: targetNode.id, order_index: newOrder } : n
+      ));
+
+    } else {
+      // ─ 兄弟として挿入（before / after）
+      const parentId = targetNode.parent_id;
+
+      // ドラッグノードを除外した兄弟リスト
+      const siblings = ns
+        .filter(n => n.parent_id === parentId && n.id !== draggedNode.id)
+        .sort((a, b) => a.order_index - b.order_index);
+      const targetIdx = siblings.findIndex(n => n.id === targetNode.id);
+
+      let newOrder;
+      if (hint.type === "before") {
+        if (targetIdx <= 0) {
+          newOrder = Math.max(1, (siblings[0]?.order_index ?? 1024) - 512);
+        } else {
+          const prev = siblings[targetIdx - 1].order_index;
+          const cur  = siblings[targetIdx].order_index;
+          newOrder   = prev + Math.max(1, Math.floor((cur - prev) / 2));
+        }
+      } else { // after
+        if (targetIdx >= siblings.length - 1) {
+          newOrder = (siblings[targetIdx]?.order_index ?? 0) + 1024;
+        } else {
+          const cur  = siblings[targetIdx].order_index;
+          const next = siblings[targetIdx + 1].order_index;
+          newOrder   = cur + Math.max(1, Math.floor((next - cur) / 2));
+        }
+      }
+
+      await updateNode(draggedNode.id, { parent_id: parentId, order_index: newOrder });
+      onNodesChange(ns.map(n =>
+        n.id === draggedNode.id ? { ...n, parent_id: parentId, order_index: newOrder } : n
+      ));
     }
-    onNodesChange(updated); onSaved();
-    if (toMove.length > 0) showToast(`${toMove.length}ノードを移動しました`);
-  }, [getNodes, selectedIds, layoutMode, onNodesChange, onSaved, setRfNodes]);
+
+    onSaved();
+    showToast("移動しました");
+  }, [layoutMode, onNodesChange, onSaved, setRfNodes]);
 
   const handleNodeClick = useCallback((e, node) => {
     if (e.shiftKey) {
@@ -601,11 +735,13 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
         onNodeClick={handleNodeClick} onSelectionChange={handleSelectionChange} onPaneClick={handlePaneClick}
         nodesDraggable={true} nodesConnectable={false} elementsSelectable={true}
         multiSelectionKeyCode="Shift" selectionOnDrag={true}
-        deleteKeyCode={null} panOnScroll={true} panOnDrag={false}
+        deleteKeyCode={null} panOnScroll={true} panOnDrag={[1, 2]} panActivationKeyCode="Space"
         fitView fitViewOptions={{ padding: 0.35 }} minZoom={0.2} maxZoom={2}
         style={{ background: "#f8fafc" }}>
         <Background variant={BackgroundVariant.Dots} color="#d4d8e1" gap={24} size={1.5} />
         <Controls showInteractive={false} />
+        {/* Zone-based ドラッグの挿入ラインオーバーレイ */}
+        <InsertionLineOverlay hint={insertHint} />
       </ReactFlow>
 
       {selectedIds.size > 1 && (
@@ -617,7 +753,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
         <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", background: toastType === "error" ? "rgba(220,38,38,0.9)" : "rgba(30,30,40,0.85)", color: "#fff", borderRadius: 8, padding: "8px 18px", fontSize: 13, pointerEvents: "none", whiteSpace: "nowrap" }}>{toastMsg}</div>
       )}
       <div style={{ position: "absolute", bottom: 16, right: 16, background: "rgba(255,255,255,0.92)", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#94a3b8", lineHeight: 1.9, pointerEvents: "none" }}>
-        <div><b style={{color:"#6b7280"}}>⌘Z</b> 取消 ・ <b style={{color:"#6b7280"}}>⌘⇧Z</b> やり直し</div>
+        <div><b style={{color:"#6b7280"}}>⌘Z</b> 取り消し ・ <b style={{color:"#6b7280"}}>⌘⇧Z</b> やり直し</div>
         <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加 ・ + PDF</div>
         <div>ダブルクリックで編集 ・ PDF でスライドショー</div>
       </div>
