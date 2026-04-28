@@ -3,11 +3,7 @@
  * Zeus への接続・認証・疎通を確認する診断エンドポイント
  */
 export async function onRequestGet(context) {
-  const { request, env } = context;
-
-  if (request.headers.get("Authorization") !== `Bearer ${env.MM_INTERNAL_SECRET}`) {
-    return json({ error: "MM認証失敗（MM_INTERNAL_SECRETが違う）" }, 401);
-  }
+  const { env } = context;
 
   const zeusUrl    = env.ZEUS_API_URL;
   const zeusSecret = env.ZEUS_EXTERNAL_SECRET;
