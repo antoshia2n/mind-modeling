@@ -22,9 +22,9 @@ export async function onRequestPost(context) {
   let body;
   try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
 
-  const { title, content, source_url, map_id, node_count, zeus_item_id } = body;
-  if (!title || !content || !source_url) {
-    return json({ error: "title, content, source_url are required" }, 400);
+  const { title, content, source_url, map_id, node_count, zeus_item_id, user_id } = body;
+  if (!title || !content || !source_url || !user_id) {
+    return json({ error: "title, content, source_url, user_id are required" }, 400);
   }
 
   const zeusUrl    = env.ZEUS_API_URL;
@@ -43,6 +43,7 @@ export async function onRequestPost(context) {
     },
     body: JSON.stringify({
       source_app: "mind-modeling",
+      user_id,
       title,
       content,
       source_url,

@@ -166,6 +166,7 @@ export default function Edit({ mapId }) {
           map_id:       mapId,
           node_count:   nodes.length,
           zeus_item_id: map?.zeus_item_id ?? null,
+          user_id:      uid,
         }),
       });
 
