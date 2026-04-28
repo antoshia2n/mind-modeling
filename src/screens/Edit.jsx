@@ -7,6 +7,7 @@ import ListMode from "./ListMode.jsx";
 import MapMode  from "./MapMode.jsx";
 import SaveTemplateModal    from "./SaveTemplateModal.jsx";
 import { TemplatePickerModal, MapPickerModal } from "./TemplatePickerModal.jsx";
+import MinutesPanel from "./MinutesPanel.jsx";
 
 const BORDER = "#e2e8f0";
 const ACCENT = "#3b82f6";
@@ -60,6 +61,7 @@ export default function Edit({ mapId }) {
 
   const [zeusState, setZeusState] = useState("idle");
   const [zeusLastSync, setZeusLastSync] = useState(null);
+  const [minutesPanelOpen, setMinutesPanelOpen] = useState(false);
 
   // ルートノード→タイトル同期（800msデバウンス）
   const titleSyncTimer = useRef(null);
@@ -191,7 +193,7 @@ export default function Edit({ mapId }) {
     layoutBtn: (active) => ({ background: active ? "#f1f5f9" : "none", color: active ? "#374151" : T.muted, border: "none", padding: "6px 10px", fontSize: 11, fontWeight: active ? 700 : 400, cursor: "pointer" }),
     iconBtn: (color) => ({ background: "none", border: `1px solid ${color ?? BORDER}`, borderRadius: 7, padding: "6px 10px", fontSize: 12, fontWeight: 600, color: color ?? T.muted, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }),
     saveLabel: { fontSize: 11, color: T.muted, flexShrink: 0, whiteSpace: "nowrap" },
-    body: { flex: 1, overflow: mode === "map" ? "hidden" : "auto" },
+    body: { flex: 1, overflow: mode === "map" ? "hidden" : "auto", position: "relative" },
     center: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: T.bg },
   };
 
@@ -203,6 +205,11 @@ export default function Edit({ mapId }) {
       <div style={s.header}>
         <button style={s.backBtn} onClick={() => navigate("/")}>←</button>
         <input style={s.titleInput} value={map.title ?? ""} onChange={handleTitleChange} onBlur={handleTitleBlur} placeholder="タイトル" />
+
+        {/* 議事録パネル */}
+        <button style={s.iconBtn(minutesPanelOpen ? PURPLE : undefined)} onClick={() => setMinutesPanelOpen(v => !v)}>
+          {minutesPanelOpen ? "● 録音中" : "録音"}
+        </button>
 
         {/* Zeus に保存 */}
         <button style={zeusBtnStyle} onClick={handleZeusPush} disabled={zeusState === "pushing"}>{zeusLabel}</button>
@@ -247,6 +254,8 @@ export default function Edit({ mapId }) {
             />
           </ReactFlowProvider>
         )}
+        {/* 議事録スライドインパネル（マップ・リスト共通） */}
+        <MinutesPanel open={minutesPanelOpen} onClose={() => setMinutesPanelOpen(false)} uid={uid} />
       </div>
 
       {showSaveTemplate && (
