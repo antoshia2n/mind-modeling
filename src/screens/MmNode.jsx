@@ -84,7 +84,10 @@ export default function MmNode({ data, selected }) {
     const bg     = data.nodeColor || "#ffffff";
     const border = isDropTgt ? "2px solid #10b981" : `1.5px solid ${selected ? PURPLE : "#e2e8f0"}`;
     return (
-      <div onDoubleClick={startEdit} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      <div data-nodeid={data.nodeId}
+        onDoubleClick={startEdit}
+        onMouseDown={e => { if (!editing) data.onDragStart?.(data.nodeId, data.label, e); }}
+        onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
         style={{ background: isDropTgt ? "#f0fdf4" : bg, border, borderRadius: 10, padding: "10px 18px", minWidth: 80, maxWidth: editing ? 480 : 300, boxShadow: "0 2px 8px rgba(0,0,0,0.07)", cursor: "default", userSelect: "none", position: "relative" }}>
         {isDropTgt && <DropLabel />}
         {handleLR}
@@ -124,7 +127,10 @@ export default function MmNode({ data, selected }) {
   })();
 
   return (
-    <div onDoubleClick={startEdit} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+    <div data-nodeid={data.nodeId}
+      onDoubleClick={startEdit}
+      onMouseDown={e => { if (!editing) data.onDragStart?.(data.nodeId, data.label, e); }}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
       style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 5, padding: hasBg || isDropTgt ? "3px 8px" : "1px 2px", borderRadius: 5, background: nodeBg, border: nodeBorder, cursor: "default", userSelect: "none", boxShadow: isDropTgt ? "0 0 0 3px #10b98140" : "none" }}>
       {isDropTgt && <DropLabel />}
       {handleLR}
