@@ -55,21 +55,16 @@ export default function MmNode({ data, selected }) {
     textDecoration: data.strikethrough ? "line-through" : "none", color: data.textColor || undefined,
   };
 
-  // ─── 共通Handle（全モード対応）──────────────────────────────
-  // 左右ハンドル（bi/right モード用）
+  // ─── 共通Handle（全モード対応・全て不可視）──────────────────
   const handleLR = <>
     <Handle id="tl" type="target" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
     <Handle id="tr" type="target" position={Position.Right} style={{ opacity: 0, pointerEvents: "none" }} />
-    <Handle id="sr" type="source" position={Position.Right}
-      style={!isLeft && !isTb && data.hasChildren ? dotStyle(-4.5) : { opacity: 0, pointerEvents: "none" }} />
-    <Handle id="sl" type="source" position={Position.Left}
-      style={isLeft && !isTb && data.hasChildren ? dotStyle(-4.5) : { opacity: 0, pointerEvents: "none" }} />
+    <Handle id="sr" type="source" position={Position.Right} style={{ opacity: 0, pointerEvents: "none" }} />
+    <Handle id="sl" type="source" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
   </>;
-  // 上下ハンドル（tb モード用）
   const handleTB = <>
     <Handle id="tt" type="target" position={Position.Top}    style={{ opacity: 0, pointerEvents: "none" }} />
-    <Handle id="sb" type="source" position={Position.Bottom}
-      style={isTb && data.hasChildren ? dotStyleV(4.5) : { opacity: 0, pointerEvents: "none" }} />
+    <Handle id="sb" type="source" position={Position.Bottom} style={{ opacity: 0, pointerEvents: "none" }} />
   </>;
 
   // ─── ルートノード ─────────────────────────────────────────
@@ -81,14 +76,10 @@ export default function MmNode({ data, selected }) {
         style={{ background: isDropTgt ? "#f0fdf4" : bg, border, borderRadius: 10, padding: "10px 18px", minWidth: 80, maxWidth: editing ? 480 : 300, boxShadow: isDropTgt ? "0 0 0 3px #10b98140" : "0 1px 4px rgba(0,0,0,0.08)", cursor: "default", userSelect: "none", position: "relative" }}>
         {isDropTgt && <DropLabel />}
         {handleLR}
-        {/* ルートは左右両方にドット */}
-        <Handle id="sl" type="source" position={Position.Left}
-          style={data.hasLeftChildren ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 10, height: 10, left: -5, opacity: 1, pointerEvents: "none" } : { opacity: 0, pointerEvents: "none" }} />
-        <Handle id="sr" type="source" position={Position.Right}
-          style={data.hasRightChildren ? { background: "#fff", border: `2px solid ${PURPLE}`, width: 10, height: 10, right: -5, opacity: 1, pointerEvents: "none" } : { opacity: 0, pointerEvents: "none" }} />
-        {/* tbモードでは上下にも */}
-        {isTb && <Handle id="sb" type="source" position={Position.Bottom}
-          style={data.hasChildren ? dotStyleV(4.5) : { opacity: 0, pointerEvents: "none" }} />}
+        {/* ルートの source handles（不可視・エッジ接続用のみ） */}
+        <Handle id="sl" type="source" position={Position.Left}  style={{ opacity: 0, pointerEvents: "none" }} />
+        <Handle id="sr" type="source" position={Position.Right} style={{ opacity: 0, pointerEvents: "none" }} />
+        {isTb && <Handle id="sb" type="source" position={Position.Bottom} style={{ opacity: 0, pointerEvents: "none" }} />}
         {showActions && <FormatToolbar data={data} hasPdf={hasPdf} />}
         {editing ? (
           <textarea ref={inputRef} value={draft} onChange={e => { autoResize(e.target); setDraft(e.target.value); }} onBlur={commitEdit} onKeyDown={handleKeyDown} rows={1}
@@ -171,13 +162,6 @@ export default function MmNode({ data, selected }) {
       )}
     </div>
   );
-}
-
-function dotStyle(offset) {
-  return { background: "#fff", border: `2px solid ${PURPLE}`, width: 9, height: 9, right: offset < 0 ? Math.abs(offset) : undefined, left: offset > 0 ? offset : undefined, opacity: 1, pointerEvents: "none" };
-}
-function dotStyleV(offsetBottom) {
-  return { background: "#fff", border: `2px solid ${PURPLE}`, width: 9, height: 9, bottom: -offsetBottom, opacity: 1, pointerEvents: "none" };
 }
 
 function PdfBadge({ onClick }) {

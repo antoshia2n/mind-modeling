@@ -11,36 +11,70 @@ import MmNode from "./MmNode.jsx";
 
 // ─── Whimsical 風カスタムエッジ ─────────────────────────────
 
+/**
+ * Whimsical 風エッジ：L字型折れ線（角丸あり）
+ * - 水平方向に BRANCH px 進む → 垂直 → 水平でターゲットへ
+ * - 同親の兄弟が同じ x で折れるため、共有縦線のように見える
+ */
 function WmEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, style }) {
-  const isVertical = sourcePosition === Position.Bottom || sourcePosition === Position.Top;
+  const R      = 5;   // 角丸半径
+  const BRANCH = 20;  // 折れ点までの距離（px）
 
+  const isVertical = sourcePosition === Position.Bottom || sourcePosition === Position.Top;
   let d;
+
   if (isVertical) {
-    // 上下モード：垂直ベジェ
-    const dy = Math.abs(targetY - sourceY);
-    const cp = Math.max(36, dy * 0.42);
-    d = `M ${sourceX},${sourceY} C ${sourceX},${sourceY + cp} ${targetX},${targetY - cp} ${targetX},${targetY}`;
+    // 上下モード
+    const goDown = sourcePosition === Position.Bottom;
+    const dirY   = goDown ? 1 : -1;
+    const by     = sourceY + dirY * BRANCH;
+    const dx     = targetX - sourceX;
+    const adx    = Math.abs(dx);
+    const cx     = dx >= 0 ? 1 : -1;
+    const cr     = Math.min(R, adx / 2, Math.abs(targetY - by) / 2);
+
+    if (adx < 2) {
+      d = `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
+    } else {
+      d = [
+        `M ${sourceX},${sourceY}`,
+        `L ${sourceX},${by - dirY * cr}`,
+        `Q ${sourceX},${by} ${sourceX + cx * cr},${by}`,
+        `L ${targetX - cx * cr},${by}`,
+        `Q ${targetX},${by} ${targetX},${by + dirY * cr}`,
+        `L ${targetX},${targetY}`,
+      ].join(' ');
+    }
   } else {
-    // 左右モード：水平ベジェ
-    const dx = Math.abs(targetX - sourceX);
-    const dy = Math.abs(targetY - sourceY);
-    const isLeft = sourcePosition === Position.Left;
-    const cp = Math.max(36, dx * 0.42);
-    // ほぼ水平の時だけわずかに弧を加える
-    const yArc = dy < 10 ? Math.min(10, dx * 0.05) : 0;
-    const sign = targetY <= sourceY ? -1 : 1;
-    const cp1x = isLeft ? sourceX - cp : sourceX + cp;
-    const cp1y = sourceY + yArc * sign;
-    const cp2x = isLeft ? targetX + cp : targetX - cp;
-    const cp2y = targetY + yArc * sign;
-    d = `M ${sourceX},${sourceY} C ${cp1x},${cp1y} ${cp2x},${cp2y} ${targetX},${targetY}`;
+    // 左右モード
+    const goRight = sourcePosition !== Position.Left;
+    const dir     = goRight ? 1 : -1;
+    const bx      = sourceX + dir * BRANCH;
+    const dy      = targetY - sourceY;
+    const ady     = Math.abs(dy);
+    const cy      = dy >= 0 ? 1 : -1;
+    const cr      = Math.min(R, ady / 2);
+
+    if (ady < 2) {
+      // 同じ高さ → 水平直線
+      d = `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
+    } else {
+      d = [
+        `M ${sourceX},${sourceY}`,
+        `L ${bx - dir * cr},${sourceY}`,
+        `Q ${bx},${sourceY} ${bx},${sourceY + cy * cr}`,
+        `L ${bx},${targetY - cy * cr}`,
+        `Q ${bx},${targetY} ${bx + dir * cr},${targetY}`,
+        `L ${targetX},${targetY}`,
+      ].join(' ');
+    }
   }
   return <BaseEdge id={id} path={d} style={style} />;
 }
 
 const nodeTypes = { mmNode: MmNode };
 const edgeTypes = { wmEdge: WmEdge };
-const EDGE_STYLE  = { stroke: "#a855f7", strokeWidth: 2, fill: "none" };
+const EDGE_STYLE  = { stroke: "#a855f7", strokeWidth: 1.5, fill: "none" };
 const DEBOUNCE_MS = 800;
 const FOCUS_EVENT = "mm-focus-node";
 const PDF_MAX_MB  = 20;

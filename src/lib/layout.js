@@ -11,7 +11,7 @@
  *   directions: { [nodeId]: "right" | "left" | "down" }
  */
 
-export const NODE_HEIGHT  = 44;
+export const NODE_HEIGHT  = 28;
 const CHILD_GAP_H  = 32;   // 水平：親端→子端の余白
 const CHILD_GAP_V  = 72;   // 垂直：親端→子端の余白（tb モード）
 const H_SIB_GAP    = 16;   // 上下モードの兄弟間水平余白
