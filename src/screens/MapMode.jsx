@@ -641,7 +641,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
         selectionOnDrag={false}
         deleteKeyCode={null}
         panOnScroll={true}
-        panOnDrag={true}                 /* 背景ドラッグでパン */
+        panOnDrag={[1, 2]}               /* 中・右クリックのみパン。左クリックはカスタムドラッグ用 */
         panActivationKeyCode="Space"     /* Space+ドラッグでもパン */
         fitView fitViewOptions={{ padding: 0.35 }}
         minZoom={0.15} maxZoom={2.5}
