@@ -170,7 +170,13 @@ export default function Edit({ mapId }) {
       });
 
       if (!res.ok) {
-        const err = await res.text().catch(() => "");
+        let errDetail = "";
+        try {
+          const errData = await res.json();
+          errDetail = errData.detail || errData.error || JSON.stringify(errData);
+        } catch { errDetail = await res.text().catch(() => ""); }
+        // Zeus が何を返したか確認できるようにアラートで表示
+        window.alert(`Zeus 保存エラー（HTTP ${res.status}）\n\n${errDetail}`);
         showToast(`Zeus への保存に失敗しました（HTTP ${res.status}）`, "error");
         setZeusState("error"); return;
       }
