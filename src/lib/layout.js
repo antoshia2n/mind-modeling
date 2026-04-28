@@ -1,25 +1,22 @@
 /**
  * mm_nodes から react-flow 用の位置と方向を計算する。
  *
- * calcLayout の戻り値:
- *   positions:  { [nodeId]: { x, y } }
- *   directions: { [nodeId]: "right" | "left" }
- *     - right: 親から右方向に展開するノード
- *     - left:  親から左方向に展開するノード
- *     - ルートノードは "right"（両方向の起点として扱う）
- *
  * layoutMode:
  *   "bi" … ルートを中心に左右展開（デフォルト）
  *   "lr" … 左→右の一方向ツリー
+ *
+ * 返り値:
+ *   positions:  { [nodeId]: { x, y } }
+ *   directions: { [nodeId]: "right" | "left" }
  */
 
-const NODE_HEIGHT  = 50;
-const CHILD_GAP    = 52;   // 親端 → 子端 の余白（px）
-const MIN_NODE_W   = 80;
-const MAX_NODE_W   = 240;
-const CHAR_W_JP    = 14;
-const CHAR_W_ASCII = 8;
-const NODE_PADDING = 32;
+const NODE_HEIGHT  = 44;
+const CHILD_GAP    = 32;   // 親端 → 子端 の余白（詰めた）
+const MIN_NODE_W   = 60;
+const MAX_NODE_W   = 220;
+const CHAR_W_JP    = 13;   // 実際のレンダリング幅に近い値
+const CHAR_W_ASCII = 7;
+const NODE_PADDING = 20;   // パディング分（詰めた）
 
 export function estimateNodeWidth(text) {
   if (!text) return MIN_NODE_W;
@@ -81,7 +78,7 @@ function calcBidirectional(nodes, root, byParent) {
     return yStart + h;
   }
 
-  // 高さベースのグリーディ分割（重い枝が均等に振り分けられる）
+  // 高さベースのグリーディ分割
   const rootChildren = byParent[root.id] || [];
   const right = [], left = [];
   let rightH = 0, leftH = 0;
@@ -94,15 +91,12 @@ function calcBidirectional(nodes, root, byParent) {
   const totalH = Math.max(NODE_HEIGHT, rightH + leftH);
   const rootW  = estimateNodeWidth(root.content ?? "");
 
-  // ルートを中央に配置
   directions[root.id] = "right";
   positions[root.id]  = { x: 0, y: totalH / 2 - NODE_HEIGHT / 2 };
 
-  // 右グループ
   let ry = totalH / 2 - rightH / 2;
   for (const child of right) ry = place(child.id, rootW + CHILD_GAP, ry, "right");
 
-  // 左グループ
   let ly = totalH / 2 - leftH / 2;
   for (const child of left) ly = place(child.id, -CHILD_GAP, ly, "left");
 

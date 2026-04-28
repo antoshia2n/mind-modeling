@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useAuthUid } from "shia2n-core";
-import { getNodes, getMap, getPdfSignedUrl } from "../lib/supabase.js";
+import { useAuthUid, supabase } from "shia2n-core";
+import { getMap, getPdfSignedUrl } from "../lib/supabase.js";
 
 /**
  * /slideshow/:nodeId
@@ -63,10 +63,7 @@ export default function Slideshow() {
 
     async function init() {
       try {
-        // ノード情報を取得（map_id 経由でマップタイトルも取る）
-        const allMaps = [];
-        // nodeId でノードを直接検索するクエリ
-        const { supabase } = await import("shia2n-core");
+        // ノード情報を取得
         const { data: nodeData } = await supabase
           .from("mm_nodes").select("*").eq("id", nodeId).single();
 

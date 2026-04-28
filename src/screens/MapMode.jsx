@@ -14,12 +14,23 @@ import MmNode from "./MmNode.jsx";
 
 function WmEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style }) {
   const dx     = Math.abs(targetX - sourceX);
-  const cpDist = Math.max(60, dx * 0.45);
+  const dy     = Math.abs(targetY - sourceY);
   const isLeft = sourcePosition === Position.Left;
+
+  // 水平距離に応じた制御点距離（小さいほどきつい曲線）
+  const cpDist = Math.max(40, dx * 0.42);
+
+  // Y差が小さい（ほぼ水平）時でもわずかに弧を描くようオフセット
+  // 親→子の方向に応じて上下を決める（上の兄弟は上弧、下の兄弟は下弧）
+  const yArc = dy < 10 ? Math.min(12, dx * 0.06) : 0;
+  // ルートより上の枝は上弧、下の枝は下弧
+  const arcSign = targetY <= sourceY ? -1 : 1;
+
   const cp1x = isLeft ? sourceX - cpDist : sourceX + cpDist;
-  const cp1y = sourceY;
+  const cp1y = sourceY + yArc * arcSign * 0.5;
   const cp2x = isLeft ? targetX + cpDist : targetX - cpDist;
-  const cp2y = targetY;
+  const cp2y = targetY + yArc * arcSign * 0.5;
+
   const d = `M ${sourceX},${sourceY} C ${cp1x},${cp1y} ${cp2x},${cp2y} ${targetX},${targetY}`;
   return <BaseEdge id={id} path={d} style={style} />;
 }
@@ -92,17 +103,15 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     setTimeout(() => setToastMsg(null), 2500);
   }
 
-  // ─── PDF アップロード ──────────────────────────────────────
-
-  function handleUploadPdfClick(nodeId) {
+  const handleUploadPdfClick = useCallback((nodeId) => {
     uploadNodeId.current = nodeId;
     fileInputRef.current?.click();
-  }
+  }, []);
 
-  async function handleFileChange(e) {
+  const handleFileChange = useCallback(async (e) => {
     const file   = e.target.files?.[0];
     const nodeId = uploadNodeId.current;
-    e.target.value = ""; // リセット（同じファイルを再選択できるよう）
+    e.target.value = "";
     if (!file || !nodeId) return;
 
     if (file.type !== "application/pdf") { showToast("PDF ファイルのみアップロードできます", "error"); return; }
@@ -110,7 +119,6 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
 
     showToast("📄 アップロード中...", "info");
 
-    // 既存の PDF があれば先に削除
     const existingNode = nodes.find(n => n.id === nodeId);
     if (existingNode?.pdf_url) await deletePdf(existingNode.pdf_url).catch(() => {});
 
@@ -121,9 +129,9 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, pdf_url: storagePath, pdf_filename: file.name } : n));
     onSaved();
     showToast(`✓ PDF を添付しました（${file.name}）`);
-  }
+  }, [nodes, uid, onNodesChange, onSaved]);
 
-  async function handleDeletePdf(nodeId) {
+  const handleDeletePdf = useCallback(async (nodeId) => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node?.pdf_url) return;
     if (!window.confirm("添付された PDF を削除しますか？")) return;
@@ -132,11 +140,11 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, pdf_url: null, pdf_filename: null } : n));
     onSaved();
     showToast("PDF を削除しました");
-  }
+  }, [nodes, onNodesChange, onSaved]);
 
-  function handleOpenSlideshow(nodeId) {
+  const handleOpenSlideshow = useCallback((nodeId) => {
     window.open(`/slideshow/${nodeId}`, "_blank");
-  }
+  }, []);
 
   // ─── ノード操作 ───────────────────────────────────────────
 
@@ -371,7 +379,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       const isLeft = (directions[n.id] ?? "right") === "left";
       return { id: `e-${n.parent_id}-${n.id}`, source: n.parent_id, target: n.id, sourceHandle: isLeft ? "sl" : "sr", targetHandle: isLeft ? "tr" : "tl", type: "wmEdge", style: EDGE_STYLE, hidden: hiddenIds.has(n.id) };
     }));
-  }, [nodes, selectedIds, dropTargetId, layoutMode, handleContentChange, toggleCollapse, addChild, addSibling, toggleFormat, setColor, onRequestTemplateInsert, onRequestMapLink]);
+  }, [nodes, selectedIds, dropTargetId, layoutMode, handleContentChange, toggleCollapse, addChild, addSibling, toggleFormat, setColor, onRequestTemplateInsert, onRequestMapLink, handleUploadPdfClick, handleDeletePdf, handleOpenSlideshow]);
 
   // ─── ドラッグ & ドロップ ─────────────────────────────────
 
