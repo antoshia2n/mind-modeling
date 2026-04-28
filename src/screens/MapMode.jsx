@@ -12,61 +12,29 @@ import MmNode from "./MmNode.jsx";
 // ─── Whimsical 風カスタムエッジ ─────────────────────────────
 
 /**
- * Whimsical 風エッジ：L字型折れ線（角丸あり）
- * - 水平方向に BRANCH px 進む → 垂直 → 水平でターゲットへ
- * - 同親の兄弟が同じ x で折れるため、共有縦線のように見える
+ * Whimsical 正解エッジ：S字ベジェ
+ * - 両端が水平接線になる Cubic Bezier
+ * - 制御点距離 = 水平距離の50%
+ * - これが Whimsical のエッジ公式
  */
 function WmEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, style }) {
-  const R      = 5;   // 角丸半径
-  const BRANCH = 20;  // 折れ点までの距離（px）
-
   const isVertical = sourcePosition === Position.Bottom || sourcePosition === Position.Top;
   let d;
 
   if (isVertical) {
-    // 上下モード
-    const goDown = sourcePosition === Position.Bottom;
-    const dirY   = goDown ? 1 : -1;
-    const by     = sourceY + dirY * BRANCH;
-    const dx     = targetX - sourceX;
-    const adx    = Math.abs(dx);
-    const cx     = dx >= 0 ? 1 : -1;
-    const cr     = Math.min(R, adx / 2, Math.abs(targetY - by) / 2);
-
-    if (adx < 2) {
-      d = `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
-    } else {
-      d = [
-        `M ${sourceX},${sourceY}`,
-        `L ${sourceX},${by - dirY * cr}`,
-        `Q ${sourceX},${by} ${sourceX + cx * cr},${by}`,
-        `L ${targetX - cx * cr},${by}`,
-        `Q ${targetX},${by} ${targetX},${by + dirY * cr}`,
-        `L ${targetX},${targetY}`,
-      ].join(' ');
-    }
+    // 上下モード：垂直S字ベジェ
+    const dy = Math.abs(targetY - sourceY);
+    const cp = Math.max(24, dy * 0.5);
+    d = `M ${sourceX},${sourceY} C ${sourceX},${sourceY + cp} ${targetX},${targetY - cp} ${targetX},${targetY}`;
   } else {
-    // 左右モード
-    const goRight = sourcePosition !== Position.Left;
-    const dir     = goRight ? 1 : -1;
-    const bx      = sourceX + dir * BRANCH;
-    const dy      = targetY - sourceY;
-    const ady     = Math.abs(dy);
-    const cy      = dy >= 0 ? 1 : -1;
-    const cr      = Math.min(R, ady / 2);
-
-    if (ady < 2) {
-      // 同じ高さ → 水平直線
-      d = `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
+    // 左右モード：水平S字ベジェ（Whimsical正解）
+    const isLeft = sourcePosition === Position.Left;
+    const dx     = Math.abs(targetX - sourceX);
+    const cp     = Math.max(20, dx * 0.5);
+    if (isLeft) {
+      d = `M ${sourceX},${sourceY} C ${sourceX - cp},${sourceY} ${targetX + cp},${targetY} ${targetX},${targetY}`;
     } else {
-      d = [
-        `M ${sourceX},${sourceY}`,
-        `L ${bx - dir * cr},${sourceY}`,
-        `Q ${bx},${sourceY} ${bx},${sourceY + cy * cr}`,
-        `L ${bx},${targetY - cy * cr}`,
-        `Q ${bx},${targetY} ${bx + dir * cr},${targetY}`,
-        `L ${targetX},${targetY}`,
-      ].join(' ');
+      d = `M ${sourceX},${sourceY} C ${sourceX + cp},${sourceY} ${targetX - cp},${targetY} ${targetX},${targetY}`;
     }
   }
   return <BaseEdge id={id} path={d} style={style} />;
@@ -560,8 +528,8 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
         multiSelectionKeyCode="Shift" selectionOnDrag={true}
         deleteKeyCode={null} panOnScroll={true} panOnDrag={false}
         fitView fitViewOptions={{ padding: 0.35 }} minZoom={0.2} maxZoom={2}
-        style={{ background: "#eef0f6" }}>
-        <Background variant={BackgroundVariant.Dots} color="#c7cade" gap={22} size={1.5} />
+        style={{ background: "#f8fafc" }}>
+        <Background variant={BackgroundVariant.Dots} color="#d4d8e1" gap={24} size={1.5} />
         <Controls showInteractive={false} />
       </ReactFlow>
 
