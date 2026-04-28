@@ -1,37 +1,40 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import {
   ReactFlow, Background, Controls, BackgroundVariant,
-  useNodesState, useEdgesState, Position, useReactFlow,
-  BaseEdge,
+  useNodesState, useEdgesState, Position, useReactFlow, BaseEdge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { createNode, updateNode, deleteNode, uploadPdf, deletePdf } from "../lib/supabase.js";
-import { calcLayout } from "../lib/layout.js";
+import { createNode, updateNode, deleteNode, restoreNode, uploadPdf, deletePdf } from "../lib/supabase.js";
+import { calcLayout, NODE_HEIGHT } from "../lib/layout.js";
 import { navigate } from "../lib/navigate.js";
 import MmNode from "./MmNode.jsx";
 
-// ─── Whimsical 風カスタムエッジ ──────────────────────────────
+// ─── Whimsical 風カスタムエッジ ─────────────────────────────
 
-function WmEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style }) {
-  const dx     = Math.abs(targetX - sourceX);
-  const dy     = Math.abs(targetY - sourceY);
-  const isLeft = sourcePosition === Position.Left;
+function WmEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, style }) {
+  const isVertical = sourcePosition === Position.Bottom || sourcePosition === Position.Top;
 
-  // 水平距離に応じた制御点距離（小さいほどきつい曲線）
-  const cpDist = Math.max(40, dx * 0.42);
-
-  // Y差が小さい（ほぼ水平）時でもわずかに弧を描くようオフセット
-  // 親→子の方向に応じて上下を決める（上の兄弟は上弧、下の兄弟は下弧）
-  const yArc = dy < 10 ? Math.min(12, dx * 0.06) : 0;
-  // ルートより上の枝は上弧、下の枝は下弧
-  const arcSign = targetY <= sourceY ? -1 : 1;
-
-  const cp1x = isLeft ? sourceX - cpDist : sourceX + cpDist;
-  const cp1y = sourceY + yArc * arcSign * 0.5;
-  const cp2x = isLeft ? targetX + cpDist : targetX - cpDist;
-  const cp2y = targetY + yArc * arcSign * 0.5;
-
-  const d = `M ${sourceX},${sourceY} C ${cp1x},${cp1y} ${cp2x},${cp2y} ${targetX},${targetY}`;
+  let d;
+  if (isVertical) {
+    // 上下モード：垂直ベジェ
+    const dy = Math.abs(targetY - sourceY);
+    const cp = Math.max(36, dy * 0.42);
+    d = `M ${sourceX},${sourceY} C ${sourceX},${sourceY + cp} ${targetX},${targetY - cp} ${targetX},${targetY}`;
+  } else {
+    // 左右モード：水平ベジェ
+    const dx = Math.abs(targetX - sourceX);
+    const dy = Math.abs(targetY - sourceY);
+    const isLeft = sourcePosition === Position.Left;
+    const cp = Math.max(36, dx * 0.42);
+    // ほぼ水平の時だけわずかに弧を加える
+    const yArc = dy < 10 ? Math.min(10, dx * 0.05) : 0;
+    const sign = targetY <= sourceY ? -1 : 1;
+    const cp1x = isLeft ? sourceX - cp : sourceX + cp;
+    const cp1y = sourceY + yArc * sign;
+    const cp2x = isLeft ? targetX + cp : targetX - cp;
+    const cp2y = targetY + yArc * sign;
+    d = `M ${sourceX},${sourceY} C ${cp1x},${cp1y} ${cp2x},${cp2y} ${targetX},${targetY}`;
+  }
   return <BaseEdge id={id} path={d} style={style} />;
 }
 
@@ -41,22 +44,21 @@ const EDGE_STYLE  = { stroke: "#a855f7", strokeWidth: 2, fill: "none" };
 const DEBOUNCE_MS = 800;
 const FOCUS_EVENT = "mm-focus-node";
 const PDF_MAX_MB  = 20;
+const MAX_HISTORY = 40;
 
 function fireNodeFocus(nodeId) {
-  setTimeout(() => {
-    window.dispatchEvent(new CustomEvent(FOCUS_EVENT, { detail: { nodeId } }));
-  }, 80);
+  setTimeout(() => window.dispatchEvent(new CustomEvent(FOCUS_EVENT, { detail: { nodeId } })), 80);
 }
 
 function getDescendantIds(nodeId, nodes) {
-  const result = [];
-  for (const n of nodes) { if (n.parent_id === nodeId) { result.push(n.id); result.push(...getDescendantIds(n.id, nodes)); } }
-  return result;
+  const r = [];
+  for (const n of nodes) { if (n.parent_id === nodeId) { r.push(n.id); r.push(...getDescendantIds(n.id, nodes)); } }
+  return r;
 }
 function getHiddenIds(nodes) {
-  const hidden = new Set();
-  for (const n of nodes) { if (n.collapsed) for (const id of getDescendantIds(n.id, nodes)) hidden.add(id); }
-  return hidden;
+  const h = new Set();
+  for (const n of nodes) { if (n.collapsed) for (const id of getDescendantIds(n.id, nodes)) h.add(id); }
+  return h;
 }
 function findDropTarget(dragged, allRfNodes, excludeIds) {
   const dw = dragged.measured?.width ?? 140, dh = dragged.measured?.height ?? 36;
@@ -66,28 +68,65 @@ function findDropTarget(dragged, allRfNodes, excludeIds) {
     if (excludeIds.has(n.id) || n.hidden) continue;
     const nw = n.measured?.width ?? 140, nh = n.measured?.height ?? 36;
     if (cx >= n.position.x && cx <= n.position.x + nw && cy >= n.position.y && cy <= n.position.y + nh) {
-      const area = nw * nh;
-      if (area > bestArea) { best = n; bestArea = area; }
+      const a = nw * nh; if (a > bestArea) { best = n; bestArea = a; }
     }
   }
   return best;
 }
-function collectSubtree(nodeId, nodes) {
-  const result = [];
-  function dfs(id, parentIdx) {
-    const node = nodes.find(n => n.id === id); if (!node) return;
-    const myIdx = result.length;
-    result.push({ content: node.content ?? "", parentIdx, bold: node.bold ?? false, italic: node.italic ?? false, strikethrough: node.strikethrough ?? false, text_color: node.text_color ?? null, node_color: node.node_color ?? null });
-    nodes.filter(n => n.parent_id === id).sort((a, b) => a.order_index - b.order_index).forEach(c => dfs(c.id, myIdx));
+
+/**
+ * undo 用：スナップショットの差分を Supabase に適用する
+ * - 削除されたノード → restoreNode（depth 順）
+ * - 追加されたノード → deleteNode
+ * - 変更されたノード → updateNode
+ */
+async function applySnapshot(targetNodes, currentNodes) {
+  const FIELDS = ['content','parent_id','order_index','collapsed','bold','italic','strikethrough','text_color','node_color','linked_map_id','pdf_url','pdf_filename'];
+  const curMap = new Map(currentNodes.map(n => [n.id, n]));
+  const tgtMap = new Map(targetNodes.map(n => [n.id, n]));
+
+  // 追加されたノードを削除（undo で取り消す）
+  for (const n of currentNodes) { if (!tgtMap.has(n.id)) await deleteNode(n.id).catch(() => {}); }
+
+  // 削除されたノードを復元（depth 順で insert）
+  const toRestore = targetNodes.filter(n => !curMap.has(n.id));
+  const depth = (id, visited = new Set()) => {
+    if (visited.has(id)) return 0; visited.add(id);
+    const nd = tgtMap.get(id);
+    return nd?.parent_id ? 1 + depth(nd.parent_id, visited) : 0;
+  };
+  toRestore.sort((a, b) => depth(a.id) - depth(b.id));
+  for (const n of toRestore) await restoreNode(n).catch(() => {});
+
+  // 変更されたノードを更新
+  for (const tgt of targetNodes) {
+    const cur = curMap.get(tgt.id);
+    if (!cur) continue;
+    const updates = {};
+    for (const f of FIELDS) { if (tgt[f] !== cur[f]) updates[f] = tgt[f]; }
+    if (Object.keys(updates).length) await updateNode(tgt.id, updates).catch(() => {});
   }
-  dfs(nodeId, -1); return result;
 }
 
-export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesChange, onSaved, onRequestTemplateInsert, onRequestMapLink }) {
+export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesChange, onSaved, onRequestTemplateInsert, onRequestMapLink, onRootLabelChange }) {
   const { getNodes } = useReactFlow();
   const saveTimers   = useRef({});
   const fileInputRef = useRef(null);
-  const uploadNodeId = useRef(null); // アップロード対象のノードID
+  const uploadNodeId = useRef(null);
+
+  // ─── Undo/Redo 履歴 ────────────────────────────────────────
+  const historyRef   = useRef([]);   // スナップショットの配列
+  const historyIdxRef = useRef(-1);  // 現在位置
+  const isUndoingRef = useRef(false);
+
+  function saveHistory() {
+    if (isUndoingRef.current) return;
+    const snap = nodes.map(n => ({ ...n }));
+    historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1);
+    historyRef.current.push(snap);
+    if (historyRef.current.length > MAX_HISTORY) historyRef.current.shift();
+    historyIdxRef.current = historyRef.current.length - 1;
+  }
 
   const [rfNodes, setRfNodes, onRfNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges, onRfEdgesChange] = useEdgesState([]);
@@ -103,69 +142,95 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     setTimeout(() => setToastMsg(null), 2500);
   }
 
+  // ─── Undo / Redo ──────────────────────────────────────────
+
+  const undo = useCallback(async () => {
+    if (historyIdxRef.current <= 0) { showToast("これ以上取り消せません"); return; }
+    isUndoingRef.current = true;
+    const targetSnap = historyRef.current[historyIdxRef.current - 1];
+    showToast("⏪ 取り消し中...");
+    await applySnapshot(targetSnap, nodes);
+    historyIdxRef.current--;
+    onNodesChange(targetSnap);
+    onSaved();
+    isUndoingRef.current = false;
+    showToast("⏪ 取り消しました");
+  }, [nodes, onNodesChange, onSaved]);
+
+  const redo = useCallback(async () => {
+    if (historyIdxRef.current >= historyRef.current.length - 1) { showToast("これ以上やり直せません"); return; }
+    isUndoingRef.current = true;
+    const targetSnap = historyRef.current[historyIdxRef.current + 1];
+    showToast("⏩ やり直し中...");
+    await applySnapshot(targetSnap, nodes);
+    historyIdxRef.current++;
+    onNodesChange(targetSnap);
+    onSaved();
+    isUndoingRef.current = false;
+    showToast("⏩ やり直しました");
+  }, [nodes, onNodesChange, onSaved]);
+
+  // ─── PDF 操作 ─────────────────────────────────────────────
+
   const handleUploadPdfClick = useCallback((nodeId) => {
     uploadNodeId.current = nodeId;
     fileInputRef.current?.click();
   }, []);
 
   const handleFileChange = useCallback(async (e) => {
-    const file   = e.target.files?.[0];
-    const nodeId = uploadNodeId.current;
+    const file = e.target.files?.[0]; const nodeId = uploadNodeId.current;
     e.target.value = "";
     if (!file || !nodeId) return;
-
     if (file.type !== "application/pdf") { showToast("PDF ファイルのみアップロードできます", "error"); return; }
     if (file.size > PDF_MAX_MB * 1024 * 1024) { showToast(`ファイルサイズは ${PDF_MAX_MB}MB 以内にしてください`, "error"); return; }
-
-    showToast("📄 アップロード中...", "info");
-
+    showToast("📄 アップロード中...");
     const existingNode = nodes.find(n => n.id === nodeId);
     if (existingNode?.pdf_url) await deletePdf(existingNode.pdf_url).catch(() => {});
-
-    const storagePath = await uploadPdf(uid, nodeId, file);
-    if (!storagePath) { showToast("アップロードに失敗しました", "error"); return; }
-
-    await updateNode(nodeId, { pdf_url: storagePath, pdf_filename: file.name });
-    onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, pdf_url: storagePath, pdf_filename: file.name } : n));
-    onSaved();
-    showToast(`✓ PDF を添付しました（${file.name}）`);
+    const path = await uploadPdf(uid, nodeId, file);
+    if (!path) { showToast("アップロードに失敗しました", "error"); return; }
+    saveHistory();
+    await updateNode(nodeId, { pdf_url: path, pdf_filename: file.name });
+    onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, pdf_url: path, pdf_filename: file.name } : n));
+    onSaved(); showToast(`✓ PDF を添付しました（${file.name}）`);
   }, [nodes, uid, onNodesChange, onSaved]);
 
   const handleDeletePdf = useCallback(async (nodeId) => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node?.pdf_url) return;
     if (!window.confirm("添付された PDF を削除しますか？")) return;
+    saveHistory();
     await deletePdf(node.pdf_url).catch(() => {});
     await updateNode(nodeId, { pdf_url: null, pdf_filename: null });
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, pdf_url: null, pdf_filename: null } : n));
-    onSaved();
-    showToast("PDF を削除しました");
+    onSaved(); showToast("PDF を削除しました");
   }, [nodes, onNodesChange, onSaved]);
 
-  const handleOpenSlideshow = useCallback((nodeId) => {
-    window.open(`/slideshow/${nodeId}`, "_blank");
-  }, []);
+  const handleOpenSlideshow = useCallback((nodeId) => window.open(`/slideshow/${nodeId}`, "_blank"), []);
 
   // ─── ノード操作 ───────────────────────────────────────────
 
   const handleContentChange = useCallback((nodeId, value) => {
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, content: value } : n));
+    // ルートノードの場合、タイトルも同期
+    const node = nodes.find(n => n.id === nodeId);
+    if (node && !node.parent_id) onRootLabelChange?.(value);
     clearTimeout(saveTimers.current[nodeId]);
     saveTimers.current[nodeId] = setTimeout(async () => { await updateNode(nodeId, { content: value }); onSaved(); }, DEBOUNCE_MS);
-  }, [nodes, onNodesChange, onSaved]);
+  }, [nodes, onNodesChange, onSaved, onRootLabelChange]);
 
-  const addSibling = useCallback(async (nodeId, position = "after") => {
+  const addSibling = useCallback(async (nodeId, pos = "after") => {
     const node = nodes.find(n => n.id === nodeId); if (!node) return;
     const siblings = nodes.filter(n => n.parent_id === node.parent_id).sort((a, b) => a.order_index - b.order_index);
     const ci = siblings.findIndex(n => n.id === nodeId);
     let newOrder;
-    if (position === "after") {
+    if (pos === "after") {
       newOrder = ci === siblings.length - 1 ? (siblings[ci]?.order_index ?? 0) + 1024
-        : siblings[ci].order_index + Math.max(1, Math.floor((siblings[ci + 1].order_index - siblings[ci].order_index) / 2));
+        : siblings[ci].order_index + Math.max(1, Math.floor((siblings[ci+1].order_index - siblings[ci].order_index) / 2));
     } else {
       newOrder = ci === 0 ? Math.max(1, siblings[0].order_index - 512)
-        : siblings[ci - 1].order_index + Math.max(1, Math.floor((siblings[ci].order_index - siblings[ci - 1].order_index) / 2));
+        : siblings[ci-1].order_index + Math.max(1, Math.floor((siblings[ci].order_index - siblings[ci-1].order_index) / 2));
     }
+    saveHistory();
     const newNode = await createNode(uid, mapId, node.parent_id, newOrder, "");
     if (!newNode) return;
     onNodesChange([...nodes, newNode]); onSaved();
@@ -176,34 +241,30 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
   const addChild = useCallback(async (nodeId) => {
     const children = nodes.filter(n => n.parent_id === nodeId);
     const newOrder = children.length > 0 ? Math.max(...children.map(n => n.order_index)) + 1024 : 1024;
-    const newNode  = await createNode(uid, mapId, nodeId, newOrder, "");
+    saveHistory();
+    const newNode = await createNode(uid, mapId, nodeId, newOrder, "");
     if (!newNode) return;
     onNodesChange([...nodes, newNode]); onSaved();
     setSelectedId(newNode.id); setSelectedIds(new Set([newNode.id]));
     fireNodeFocus(newNode.id);
   }, [nodes, uid, mapId, onNodesChange, onSaved]);
 
-  const removeNode = useCallback(async (nodeId) => {
-    if (nodes.length <= 1) return;
-    await deleteNode(nodeId);
-    onNodesChange(nodes.filter(n => ![nodeId, ...getDescendantIds(nodeId, nodes)].includes(n.id)));
-    onSaved(); setSelectedId(null); setSelectedIds(new Set());
-  }, [nodes, onNodesChange, onSaved]);
-
   const removeSelectedNodes = useCallback(async () => {
-    const idsToRemove = selectedIds.size > 0 ? [...selectedIds] : (selectedId ? [selectedId] : []);
-    if (idsToRemove.length === 0 || nodes.length <= idsToRemove.length) return;
-    const allToRemove = new Set(idsToRemove);
-    for (const id of idsToRemove) for (const did of getDescendantIds(id, nodes)) allToRemove.add(did);
-    for (const id of idsToRemove) await deleteNode(id).catch(() => {});
-    onNodesChange(nodes.filter(n => !allToRemove.has(n.id)));
+    const ids = selectedIds.size > 0 ? [...selectedIds] : (selectedId ? [selectedId] : []);
+    if (!ids.length || nodes.length <= ids.length) return;
+    const all = new Set(ids);
+    for (const id of ids) for (const d of getDescendantIds(id, nodes)) all.add(d);
+    saveHistory();
+    for (const id of ids) await deleteNode(id).catch(() => {});
+    onNodesChange(nodes.filter(n => !all.has(n.id)));
     onSaved(); setSelectedId(null); setSelectedIds(new Set());
-    if (idsToRemove.length > 1) showToast(`${idsToRemove.length}ノードを削除しました`);
+    if (ids.length > 1) showToast(`${ids.length}ノードを削除しました`);
   }, [nodes, selectedId, selectedIds, onNodesChange, onSaved]);
 
   const toggleCollapse = useCallback(async (nodeId) => {
     const node = nodes.find(n => n.id === nodeId); if (!node) return;
     const v = !node.collapsed;
+    saveHistory();
     await updateNode(nodeId, { collapsed: v });
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, collapsed: v } : n)); onSaved();
   }, [nodes, onNodesChange, onSaved]);
@@ -211,11 +272,13 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
   const toggleFormat = useCallback(async (nodeId, field) => {
     const node = nodes.find(n => n.id === nodeId); if (!node) return;
     const v = !node[field];
+    saveHistory();
     await updateNode(nodeId, { [field]: v });
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, [field]: v } : n)); onSaved();
   }, [nodes, onNodesChange, onSaved]);
 
   const setColor = useCallback(async (nodeId, field, value) => {
+    saveHistory();
     await updateNode(nodeId, { [field]: value ?? null });
     onNodesChange(nodes.map(n => n.id === nodeId ? { ...n, [field]: value ?? null } : n)); onSaved();
   }, [nodes, onNodesChange, onSaved]);
@@ -227,6 +290,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     const ti = ci + direction;
     if (ti < 0 || ti >= siblings.length) return;
     const t = siblings[ti];
+    saveHistory();
     await Promise.all([updateNode(nodeId, { order_index: t.order_index }), updateNode(t.id, { order_index: node.order_index })]);
     onNodesChange(nodes.map(n => {
       if (n.id === nodeId) return { ...n, order_index: t.order_index };
@@ -235,31 +299,31 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     })); onSaved(); showToast("順序を変更しました");
   }, [nodes, onNodesChange, onSaved]);
 
-  const moveSelection = useCallback((nodeId, direction) => {
+  const moveSelection = useCallback((nodeId, dir) => {
     const node = nodes.find(n => n.id === nodeId); if (!node) return;
-    const hiddenIds = getHiddenIds(nodes);
-    if (direction === "right") {
-      const ch = nodes.filter(n => n.parent_id === nodeId && !hiddenIds.has(n.id)).sort((a, b) => a.order_index - b.order_index);
+    const hidden = getHiddenIds(nodes);
+    if (dir === "right") {
+      const ch = nodes.filter(n => n.parent_id === nodeId && !hidden.has(n.id)).sort((a, b) => a.order_index - b.order_index);
       if (ch.length > 0) { setSelectedId(ch[0].id); setSelectedIds(new Set([ch[0].id])); }
-    } else if (direction === "left") {
+    } else if (dir === "left") {
       if (node.parent_id) { setSelectedId(node.parent_id); setSelectedIds(new Set([node.parent_id])); }
     } else {
-      const siblings = nodes.filter(n => n.parent_id === node.parent_id && !hiddenIds.has(n.id)).sort((a, b) => a.order_index - b.order_index);
+      const siblings = nodes.filter(n => n.parent_id === node.parent_id && !hidden.has(n.id)).sort((a, b) => a.order_index - b.order_index);
       const ci = siblings.findIndex(n => n.id === nodeId);
-      let nextId = null;
-      if (direction === "up"   && ci > 0)                   nextId = siblings[ci - 1].id;
-      if (direction === "down" && ci < siblings.length - 1) nextId = siblings[ci + 1].id;
-      if (nextId) { setSelectedId(nextId); setSelectedIds(new Set([nextId])); }
+      let next = null;
+      if (dir === "up"   && ci > 0)                   next = siblings[ci-1].id;
+      if (dir === "down" && ci < siblings.length - 1) next = siblings[ci+1].id;
+      if (next) { setSelectedId(next); setSelectedIds(new Set([next])); }
     }
   }, [nodes]);
 
   const copySubtree = useCallback(async (nodeId) => {
     const result = [];
-    function dfs(id, parentIdx) {
+    function dfs(id, pi) {
       const node = nodes.find(n => n.id === id); if (!node) return;
-      const myIdx = result.length;
-      result.push({ content: node.content ?? "", parentIdx, bold: node.bold ?? false, italic: node.italic ?? false, strikethrough: node.strikethrough ?? false, text_color: node.text_color ?? null, node_color: node.node_color ?? null });
-      nodes.filter(n => n.parent_id === id).sort((a, b) => a.order_index - b.order_index).forEach(c => dfs(c.id, myIdx));
+      const mi = result.length;
+      result.push({ content: node.content ?? "", parentIdx: pi, bold: node.bold ?? false, italic: node.italic ?? false, strikethrough: node.strikethrough ?? false, text_color: node.text_color ?? null, node_color: node.node_color ?? null });
+      nodes.filter(n => n.parent_id === id).sort((a, b) => a.order_index - b.order_index).forEach(c => dfs(c.id, mi));
     }
     dfs(nodeId, -1);
     try { await navigator.clipboard.writeText(JSON.stringify({ mmCopy: true, nodes: result })); showToast(`${result.length}ノードをコピーしました`); }
@@ -270,22 +334,22 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     let text; try { text = await navigator.clipboard.readText(); } catch { showToast("クリップボードの許可が必要です", "error"); return; }
     let payload; try { payload = JSON.parse(text); } catch { return; }
     if (!payload?.mmCopy || !Array.isArray(payload.nodes)) return;
+    saveHistory();
     const idMap = {}, newNodes = [];
     for (let i = 0; i < payload.nodes.length; i++) {
       const { content, parentIdx, bold, italic, strikethrough, text_color, node_color } = payload.nodes[i];
-      const actualParentId = parentIdx === -1 ? parentId : idMap[parentIdx];
-      const current = [...nodes, ...newNodes];
-      const siblings = current.filter(n => n.parent_id === actualParentId);
-      const newOrder = siblings.length > 0 ? Math.max(...siblings.map(n => n.order_index)) + 1024 : 1024;
-      const newNode  = await createNode(uid, mapId, actualParentId, newOrder, content, { bold, italic, strikethrough, text_color, node_color });
-      if (!newNode) continue;
-      idMap[i] = newNode.id; newNodes.push(newNode);
+      const aId = parentIdx === -1 ? parentId : idMap[parentIdx];
+      const cur = [...nodes, ...newNodes], sib = cur.filter(n => n.parent_id === aId);
+      const newOrder = sib.length > 0 ? Math.max(...sib.map(n => n.order_index)) + 1024 : 1024;
+      const nn = await createNode(uid, mapId, aId, newOrder, content, { bold, italic, strikethrough, text_color, node_color });
+      if (!nn) continue;
+      idMap[i] = nn.id; newNodes.push(nn);
     }
     onNodesChange([...nodes, ...newNodes]); onSaved();
     if (newNodes.length > 0) { setSelectedId(newNodes[0].id); setSelectedIds(new Set([newNodes[0].id])); showToast(`${newNodes.length}ノードをペーストしました`); }
   }, [nodes, uid, mapId, onNodesChange, onSaved]);
 
-  // ─── キーボード ──────────────────────────────────────────
+  // ─── キーボードショートカット ────────────────────────────
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -293,7 +357,11 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       if (document.activeElement?.tagName === "TEXTAREA") return;
       const isMac = navigator.platform.toUpperCase().includes("MAC");
       const mod   = isMac ? e.metaKey : e.ctrlKey;
-      const sid   = selectedId;
+      // Undo / Redo（最優先）
+      if (e.key === "z" && mod && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      if ((e.key === "z" && mod && e.shiftKey) || (e.key === "y" && mod)) { e.preventDefault(); redo(); return; }
+
+      const sid = selectedId;
       if (sid) {
         if (e.key === "c" && mod && !e.shiftKey) { e.preventDefault(); copySubtree(sid); return; }
         if (e.key === "v" && mod && !e.shiftKey) { e.preventDefault(); pasteSubtree(sid); return; }
@@ -318,7 +386,7 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId, selectedIds, addSibling, addChild, toggleCollapse, removeSelectedNodes, moveSelection, copySubtree, pasteSubtree, toggleFormat, reorderSibling]);
+  }, [selectedId, selectedIds, undo, redo, addSibling, addChild, toggleCollapse, removeSelectedNodes, moveSelection, copySubtree, pasteSubtree, toggleFormat, reorderSibling]);
 
   // ─── rfNodes / rfEdges 同期 ──────────────────────────────
 
@@ -326,49 +394,47 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     const { positions, directions } = calcLayout(nodes, layoutMode);
     const hiddenIds = getHiddenIds(nodes);
     const rootIds   = new Set(nodes.filter(n => !n.parent_id).map(n => n.id));
+    const isTb      = layoutMode === "tb";
 
     setRfNodes(nodes.map(n => {
       const dir    = directions[n.id] ?? "right";
       const isLeft = dir === "left";
       const isRoot = rootIds.has(n.id);
+      // 上下モードの Handle 位置
+      const srcPos = isTb ? Position.Bottom : (isLeft ? Position.Left  : Position.Right);
+      const tgtPos = isTb ? Position.Top    : (isLeft ? Position.Right : Position.Left);
       return {
         id: n.id, position: positions[n.id] ?? { x: 0, y: 0 },
         type: "mmNode", hidden: hiddenIds.has(n.id),
         selected: selectedIds.has(n.id),
-        sourcePosition: isLeft ? Position.Left  : Position.Right,
-        targetPosition: isLeft ? Position.Right : Position.Left,
+        sourcePosition: srcPos, targetPosition: tgtPos,
         data: {
-          nodeId: n.id,
-          label: n.content ?? "", collapsed: n.collapsed,
+          nodeId: n.id, label: n.content ?? "", collapsed: n.collapsed,
           hasChildren:      nodes.some(c => c.parent_id === n.id),
-          hasRightChildren: isRoot && nodes.some(c => c.parent_id === n.id && directions[c.id] === "right"),
-          hasLeftChildren:  isRoot && nodes.some(c => c.parent_id === n.id && directions[c.id] === "left"),
-          isRoot, direction: dir,
+          hasRightChildren: isRoot && !isTb && nodes.some(c => c.parent_id === n.id && directions[c.id] === "right"),
+          hasLeftChildren:  isRoot && !isTb && nodes.some(c => c.parent_id === n.id && directions[c.id] === "left"),
+          isRoot, direction: dir, layoutMode,
           isDropTarget: n.id === dropTargetId,
-          isSelected:   selectedIds.has(n.id),
           bold: n.bold, italic: n.italic, strikethrough: n.strikethrough,
           textColor: n.text_color, nodeColor: n.node_color,
           linkedMapId: n.linked_map_id ?? null,
-          // PDF
-          pdfUrl:      n.pdf_url      ?? null,
-          pdfFilename: n.pdf_filename ?? null,
-          onContentChange:       (v) => handleContentChange(n.id, v),
-          onToggleCollapse:      ()  => toggleCollapse(n.id),
-          onAddChild:            ()  => addChild(n.id),
-          onAddSiblingAbove:     ()  => addSibling(n.id, "before"),
-          onAddSiblingBelow:     ()  => addSibling(n.id, "after"),
-          onToggleBold:          ()  => toggleFormat(n.id, "bold"),
-          onToggleItalic:        ()  => toggleFormat(n.id, "italic"),
-          onToggleStrikethrough: ()  => toggleFormat(n.id, "strikethrough"),
-          onTextColorChange:     (c) => setColor(n.id, "text_color", c),
-          onNodeColorChange:     (c) => setColor(n.id, "node_color", c),
-          onInsertTemplate:      ()  => onRequestTemplateInsert?.(n.id),
-          onMapLink:             ()  => onRequestMapLink?.(n.id, n.linked_map_id),
-          onNavigateLink:        ()  => { if (n.linked_map_id) navigate(`/m/${n.linked_map_id}`); },
-          // PDF 操作
-          onUploadPdf:      ()  => handleUploadPdfClick(n.id),
-          onDeletePdf:      ()  => handleDeletePdf(n.id),
-          onOpenSlideshow:  ()  => handleOpenSlideshow(n.id),
+          pdfUrl: n.pdf_url ?? null, pdfFilename: n.pdf_filename ?? null,
+          onContentChange:       (v)  => handleContentChange(n.id, v),
+          onToggleCollapse:      ()   => toggleCollapse(n.id),
+          onAddChild:            ()   => addChild(n.id),
+          onAddSiblingAbove:     ()   => addSibling(n.id, "before"),
+          onAddSiblingBelow:     ()   => addSibling(n.id, "after"),
+          onToggleBold:          ()   => toggleFormat(n.id, "bold"),
+          onToggleItalic:        ()   => toggleFormat(n.id, "italic"),
+          onToggleStrikethrough: ()   => toggleFormat(n.id, "strikethrough"),
+          onTextColorChange:     (c)  => setColor(n.id, "text_color", c),
+          onNodeColorChange:     (c)  => setColor(n.id, "node_color", c),
+          onInsertTemplate:      ()   => onRequestTemplateInsert?.(n.id),
+          onMapLink:             ()   => onRequestMapLink?.(n.id, n.linked_map_id),
+          onNavigateLink:        ()   => { if (n.linked_map_id) navigate(`/m/${n.linked_map_id}`); },
+          onUploadPdf:           ()   => handleUploadPdfClick(n.id),
+          onDeletePdf:           ()   => handleDeletePdf(n.id),
+          onOpenSlideshow:       ()   => handleOpenSlideshow(n.id),
           onEditStart: () => setEditingId(n.id),
           onEditEnd:   () => setEditingId(null),
         },
@@ -376,20 +442,23 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     }));
 
     setRfEdges(nodes.filter(n => n.parent_id).map(n => {
-      const isLeft = (directions[n.id] ?? "right") === "left";
-      return { id: `e-${n.parent_id}-${n.id}`, source: n.parent_id, target: n.id, sourceHandle: isLeft ? "sl" : "sr", targetHandle: isLeft ? "tr" : "tl", type: "wmEdge", style: EDGE_STYLE, hidden: hiddenIds.has(n.id) };
+      const dir    = directions[n.id] ?? "right";
+      const isLeft = dir === "left";
+      const srcHandle = isTb ? "sb" : (isLeft ? "sl" : "sr");
+      const tgtHandle = isTb ? "tt" : (isLeft ? "tr" : "tl");
+      return { id: `e-${n.parent_id}-${n.id}`, source: n.parent_id, target: n.id, sourceHandle: srcHandle, targetHandle: tgtHandle, type: "wmEdge", style: EDGE_STYLE, hidden: hiddenIds.has(n.id) };
     }));
   }, [nodes, selectedIds, dropTargetId, layoutMode, handleContentChange, toggleCollapse, addChild, addSibling, toggleFormat, setColor, onRequestTemplateInsert, onRequestMapLink, handleUploadPdfClick, handleDeletePdf, handleOpenSlideshow]);
 
-  // ─── ドラッグ & ドロップ ─────────────────────────────────
+  // ─── ドラッグ ────────────────────────────────────────────
 
   const handleNodeDrag = useCallback((event, draggedNode) => {
-    const allRfNodes = getNodes();
+    const allRfNodes  = getNodes();
     const draggingIds = selectedIds.size > 1 ? selectedIds : new Set([draggedNode.id]);
-    const target = findDropTarget(draggedNode, allRfNodes, draggingIds);
-    const descendants = new Set(getDescendantIds(draggedNode.id, nodes));
-    const validTarget = target && !descendants.has(target.id) ? target.id : null;
-    if (validTarget !== dropTargetId) setDropTargetId(validTarget);
+    const target      = findDropTarget(draggedNode, allRfNodes, draggingIds);
+    const descs       = new Set(getDescendantIds(draggedNode.id, nodes));
+    const valid       = target && !descs.has(target.id) ? target.id : null;
+    if (valid !== dropTargetId) setDropTargetId(valid);
   }, [getNodes, selectedIds, nodes, dropTargetId]);
 
   const handleNodeDragStop = useCallback(async (event, draggedNode) => {
@@ -401,42 +470,43 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       const { positions } = calcLayout(nodes, layoutMode);
       setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position }))); return;
     }
-    const allDescendants = new Set();
-    for (const id of draggingIds) for (const d of getDescendantIds(id, nodes)) allDescendants.add(d);
-    if (allDescendants.has(target.id)) {
+    const allDescs = new Set();
+    for (const id of draggingIds) for (const d of getDescendantIds(id, nodes)) allDescs.add(d);
+    if (allDescs.has(target.id)) {
       showToast("子孫ノードには移動できません", "error");
       const { positions } = calcLayout(nodes, layoutMode);
       setRfNodes(prev => prev.map(n => ({ ...n, position: positions[n.id] ?? n.position }))); return;
     }
     const toMove = [...draggingIds].filter(id => {
-      const node = nodes.find(n => n.id === id); if (!node) return false;
-      let cur = node;
+      const nd = nodes.find(n => n.id === id); if (!nd) return false;
+      let cur = nd;
       while (cur.parent_id) { if (draggingIds.has(cur.parent_id)) return false; cur = nodes.find(n => n.id === cur.parent_id) ?? { parent_id: null }; }
       return true;
     });
-    let updatedNodes = [...nodes];
+    saveHistory();
+    let updated = [...nodes];
     for (const nodeId of toMove) {
-      const existingSiblings = updatedNodes.filter(n => n.parent_id === target.id);
-      const newOrder = existingSiblings.length > 0 ? Math.max(...existingSiblings.map(n => n.order_index)) + 1024 : 1024;
+      const sib = updated.filter(n => n.parent_id === target.id);
+      const newOrder = sib.length > 0 ? Math.max(...sib.map(n => n.order_index)) + 1024 : 1024;
       await updateNode(nodeId, { parent_id: target.id, order_index: newOrder });
-      updatedNodes = updatedNodes.map(n => n.id === nodeId ? { ...n, parent_id: target.id, order_index: newOrder } : n);
+      updated = updated.map(n => n.id === nodeId ? { ...n, parent_id: target.id, order_index: newOrder } : n);
     }
-    onNodesChange(updatedNodes); onSaved();
+    onNodesChange(updated); onSaved();
     if (toMove.length > 0) showToast(`${toMove.length}ノードを移動しました`);
   }, [getNodes, selectedIds, nodes, layoutMode, onNodesChange, onSaved, setRfNodes]);
 
   const handleNodeClick = useCallback((e, node) => {
     if (e.shiftKey) {
-      setSelectedIds(prev => { const next = new Set(prev); if (next.has(node.id)) next.delete(node.id); else next.add(node.id); return next; });
+      setSelectedIds(prev => { const next = new Set(prev); next.has(node.id) ? next.delete(node.id) : next.add(node.id); return next; });
       setSelectedId(node.id);
     } else { setSelectedId(node.id); setSelectedIds(new Set([node.id])); }
   }, []);
 
-  const handleSelectionChange = useCallback(({ nodes: selectedNodes }) => {
-    if (selectedNodes.length > 1) {
-      const ids = new Set(selectedNodes.map(n => n.id));
+  const handleSelectionChange = useCallback(({ nodes: sel }) => {
+    if (sel.length > 1) {
+      const ids = new Set(sel.map(n => n.id));
       setSelectedIds(ids);
-      if (!ids.has(selectedId)) setSelectedId(selectedNodes[0]?.id ?? null);
+      if (!ids.has(selectedId)) setSelectedId(sel[0]?.id ?? null);
     }
   }, [selectedId]);
 
@@ -444,23 +514,11 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     if (!editingId) { setSelectedId(null); setSelectedIds(new Set()); }
   }, [editingId]);
 
-  const toastBg = toastType === "error" ? "rgba(220,38,38,0.9)" : "rgba(30,30,40,0.85)";
-
   return (
     <div style={{ width: "100%", height: "calc(100vh - 53px)", position: "relative" }}>
-      {/* 非表示ファイルインプット（PDF アップロード用） */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".pdf,application/pdf"
-        style={{ display: "none" }}
-        onChange={handleFileChange}
-      />
+      <input ref={fileInputRef} type="file" accept=".pdf,application/pdf" style={{ display: "none" }} onChange={handleFileChange} />
 
-      <ReactFlow
-        key={layoutMode}
-        nodes={rfNodes} edges={rfEdges}
-        nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+      <ReactFlow key={layoutMode} nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
         onNodesChange={onRfNodesChange} onEdgesChange={onRfEdgesChange}
         onNodeDrag={handleNodeDrag} onNodeDragStop={handleNodeDragStop}
         onNodeClick={handleNodeClick} onSelectionChange={handleSelectionChange} onPaneClick={handlePaneClick}
@@ -468,24 +526,23 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
         multiSelectionKeyCode="Shift" selectionOnDrag={true}
         deleteKeyCode={null} panOnScroll={true} panOnDrag={false}
         fitView fitViewOptions={{ padding: 0.35 }} minZoom={0.2} maxZoom={2}
-        style={{ background: "#eef0f6" }}
-      >
+        style={{ background: "#eef0f6" }}>
         <Background variant={BackgroundVariant.Dots} color="#c7cade" gap={22} size={1.5} />
         <Controls showInteractive={false} />
       </ReactFlow>
 
       {selectedIds.size > 1 && (
         <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", background: "rgba(168,85,247,0.9)", color: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 13, fontWeight: 600, pointerEvents: "none" }}>
-          {selectedIds.size}ノード選択中 — ドラッグで一括移動、Del で削除
+          {selectedIds.size}ノード選択中 — ドラッグで移動・Del で削除
         </div>
       )}
       {toastMsg && (
-        <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", background: toastBg, color: "#fff", borderRadius: 8, padding: "8px 18px", fontSize: 13, pointerEvents: "none", whiteSpace: "nowrap" }}>{toastMsg}</div>
+        <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", background: toastType === "error" ? "rgba(220,38,38,0.9)" : "rgba(30,30,40,0.85)", color: "#fff", borderRadius: 8, padding: "8px 18px", fontSize: 13, pointerEvents: "none", whiteSpace: "nowrap" }}>{toastMsg}</div>
       )}
       <div style={{ position: "absolute", bottom: 16, right: 16, background: "rgba(255,255,255,0.92)", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#94a3b8", lineHeight: 1.9, pointerEvents: "none" }}>
-        <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟追加 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加 ・ <b style={{color:"#6b7280"}}>📎</b> PDF添付</div>
-        <div><b style={{color:"#6b7280"}}>Shift+クリック</b> or <b style={{color:"#6b7280"}}>ドラッグ</b> 範囲選択</div>
-        <div>ダブルクリック or 追加で即編集 ・ 📄でスライドショー起動</div>
+        <div><b style={{color:"#6b7280"}}>⌘Z</b> 取り消し ・ <b style={{color:"#6b7280"}}>⌘⇧Z</b> やり直し</div>
+        <div><b style={{color:"#6b7280"}}>Enter</b> 兄弟 ・ <b style={{color:"#6b7280"}}>Tab</b> 子追加 ・ <b style={{color:"#6b7280"}}>📎</b> PDF</div>
+        <div>ダブルクリックで編集 ・ 📄でスライドショー</div>
       </div>
     </div>
   );
