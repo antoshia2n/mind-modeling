@@ -141,42 +141,31 @@ export default function Edit({ mapId }) {
   // ─── Zeus に保存 ─────────────────────────────────────────
   async function handleZeusPush() {
     const isChanged = !zeusLastSync || new Date(map?.updated_at) > new Date(zeusLastSync);
-    const label = zeusLastSync ? (isChanged ? "再保存" : "保存済み") : "保存";
     if (!isChanged && zeusLastSync) {
       if (!window.confirm("マップは変更されていません。それでも Zeus に再保存しますか？")) return;
     } else {
-      if (!window.confirm(`このマップを Zeus に${label}しますか？`)) return;
+      if (!window.confirm(`このマップを Zeus に保存しますか？`)) return;
     }
 
     setZeusState("pushing");
     try {
-      const content = buildHierarchicalText(nodes);
-      const sourceUrl = `https://mm.shia2n.jp/m/${mapId}`;
+      const content    = buildHierarchicalText(nodes);
+      const source_url = `https://mm.shia2n.jp/m/${mapId}`;
 
-      const zeusUrl = import.meta.env.VITE_ZEUS_API_URL;
-      const zeusSecret = import.meta.env.VITE_ZEUS_EXTERNAL_SECRET;
-
-      if (!zeusUrl || !zeusSecret) {
-        showToast("Zeus の環境変数が設定されていません（VITE_ZEUS_API_URL・VITE_ZEUS_EXTERNAL_SECRET）", "error");
-        setZeusState("error"); return;
-      }
-
-      const res = await fetch(`${zeusUrl}/api/external/push-to-zeus`, {
+      // サーバー側プロキシ経由（CORS回避・シークレット隠蔽）
+      const res = await fetch("/api/internal/push-to-zeus-proxy", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${zeusSecret}` },
+        headers: {
+          "Content-Type":  "application/json",
+          "Authorization": `Bearer ${window.__MM_SECRET__ ?? ""}`,
+        },
         body: JSON.stringify({
-          source_app:  "mind-modeling",
-          title:       map?.title || "Untitled",
+          title:        map?.title || "Untitled",
           content,
-          source_url:  sourceUrl,
-          item_type:   "text",
-          metadata: {
-            map_id:     mapId,
-            node_count: nodes.length,
-            last_synced_at: new Date().toISOString(),
-          },
-          // 既存 item があれば zeus_item_id を渡して上書き
-          ...(map?.zeus_item_id && { item_id: map.zeus_item_id }),
+          source_url,
+          map_id:       mapId,
+          node_count:   nodes.length,
+          zeus_item_id: map?.zeus_item_id ?? null,
         }),
       });
 
