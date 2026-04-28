@@ -241,6 +241,7 @@ export default function Home() {
       {/* ヘッダー */}
       <div style={{ padding: "12px 20px", borderBottom: `1px solid ${BORDER}`, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700, flex: 1, color: T.fg }}>Mind-Modeling</div>
+        <button style={{ background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: PURPLE, cursor: "pointer" }} onClick={() => navigate("/minutes")}>議事録</button>
         <button style={{ background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: PURPLE, cursor: "pointer" }} onClick={() => navigate("/import")}>移行</button>
         <button style={{ background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: MUTED, cursor: "pointer" }} onClick={() => navigate("/templates")}>テンプレート</button>
         <button style={{ background: ACCENT, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: creating ? "default" : "pointer", opacity: creating ? 0.6 : 1 }} onClick={handleCreateMap} disabled={creating}>
