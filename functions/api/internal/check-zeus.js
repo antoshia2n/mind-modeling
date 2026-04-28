@@ -21,13 +21,26 @@ export async function onRequestGet(context) {
     return json({ ...result, error: "環境変数未設定" }, 200);
   }
 
-  // Zeus の list-projects を GET で叩いて認証・疎通を確認
+  // GET list-projects の代わりに POST push-to-zeus を直接テスト
   try {
-    const res = await fetch(`${zeusUrl}/api/external/list-projects`, {
-      headers: { "Authorization": `Bearer ${zeusSecret}` },
+    const res = await fetch(`${zeusUrl}/api/external/push-to-zeus`, {
+      method: "POST",
+      headers: {
+        "Content-Type":  "application/json",
+        "Authorization": `Bearer ${zeusSecret}`,
+      },
+      body: JSON.stringify({
+        source_app: "mind-modeling",
+        title:      "【診断テスト】接続確認",
+        content:    "これは診断テストです。削除してください。",
+        source_url: "https://mm.shia2n.jp/diag",
+        item_type:  "text",
+      }),
     });
     result.zeus_status = res.status;
-    result.zeus_body   = await res.text().catch(() => "(読み取り失敗)");
+    const body = await res.text().catch(() => "(読み取り失敗)");
+    // HTMLが返ってきた場合は先頭100文字だけ表示
+    result.zeus_body   = body.startsWith("<!") ? `[HTML] ${body.slice(0, 120)}...` : body;
     result.zeus_test   = res.ok ? "OK" : "FAIL";
   } catch (e) {
     result.zeus_test = "NETWORK_ERROR";
