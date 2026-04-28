@@ -111,10 +111,16 @@ async function applySnapshot(targetNodes, currentNodes) {
 }
 
 export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesChange, onSaved, onRequestTemplateInsert, onRequestMapLink, onRootLabelChange }) {
-  const { getNodes } = useReactFlow();
+  const { getNodes, fitView } = useReactFlow();
   const saveTimers   = useRef({});
   const fileInputRef = useRef(null);
   const uploadNodeId = useRef(null);
+
+  // ─── 2パスレイアウト補正 ──────────────────────────────────
+  // 1パス目：推定幅で仮配置 → react-flow が実際の幅を計測
+  // 2パス目：実測幅で再配置 → 重なり解消
+  const layoutCorrected = useRef(false);
+  const layoutStructKey = useRef("");
 
   // ─── Undo/Redo 履歴 ────────────────────────────────────────
   const historyRef   = useRef([]);   // スナップショットの配列
@@ -390,9 +396,16 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedId, selectedIds, undo, redo, addSibling, addChild, toggleCollapse, removeSelectedNodes, moveSelection, copySubtree, pasteSubtree, toggleFormat, reorderSibling]);
 
-  // ─── rfNodes / rfEdges 同期 ──────────────────────────────
+  // ─── rfNodes / rfEdges 同期（1パス目：推定幅で配置）──────
 
   useEffect(() => {
+    // 構造キーが変わったら補正フラグをリセット
+    const structKey = nodes.map(n => n.id + n.parent_id).join(',') + layoutMode;
+    if (layoutStructKey.current !== structKey) {
+      layoutStructKey.current = structKey;
+      layoutCorrected.current = false;
+    }
+
     const { positions, directions } = calcLayout(nodes, layoutMode);
     const hiddenIds = getHiddenIds(nodes);
     const rootIds   = new Set(nodes.filter(n => !n.parent_id).map(n => n.id));
@@ -451,6 +464,37 @@ export default function MapMode({ uid, mapId, nodes, layoutMode = "bi", onNodesC
       return { id: `e-${n.parent_id}-${n.id}`, source: n.parent_id, target: n.id, sourceHandle: srcHandle, targetHandle: tgtHandle, type: "wmEdge", style: EDGE_STYLE, hidden: hiddenIds.has(n.id) };
     }));
   }, [nodes, selectedIds, dropTargetId, layoutMode, handleContentChange, toggleCollapse, addChild, addSibling, toggleFormat, setColor, onRequestTemplateInsert, onRequestMapLink, handleUploadPdfClick, handleDeletePdf, handleOpenSlideshow]);
+
+  // ─── 2パス目：実測幅で再配置（重なり解消）─────────────────
+  // react-flow がノードを描画・計測した後に rfNodes.measured.width が入る。
+  // 全ノードの計測が完了したら実測幅で再計算し、精確な位置に更新する。
+
+  useEffect(() => {
+    if (layoutCorrected.current) return;
+    if (rfNodes.length === 0) return;
+
+    // 全ノードの計測が完了しているか確認
+    const allMeasured = rfNodes.every(n => n.measured?.width && n.measured?.height);
+    if (!allMeasured) return;
+
+    layoutCorrected.current = true;
+
+    // 実測幅のマップを作成
+    const widths = {};
+    for (const n of rfNodes) widths[n.id] = n.measured.width;
+
+    // 実測幅で再計算
+    const { positions } = calcLayout(nodes, layoutMode, widths);
+
+    // 位置を更新（selection・data等は維持）
+    setRfNodes(prev => prev.map(n => ({
+      ...n,
+      position: positions[n.id] ?? n.position,
+    })));
+
+    // ビューをフィット（位置更新後に少し待つ）
+    setTimeout(() => fitView({ padding: 0.35, duration: 200 }), 80);
+  }, [rfNodes]); // rfNodesが更新されるたびにチェック（measured.widthが入るまで）
 
   // ─── ドラッグ ────────────────────────────────────────────
 
