@@ -12,28 +12,17 @@ import Minutes        from "./screens/Minutes.jsx";
 
 function parsePath() {
   const p = window.location.pathname;
-
-  if (p.startsWith("/share/")) {
-    const token = p.slice(7).replace(/\/$/, "");
-    if (token) return { screen: "share", token };
-  }
-  if (p.startsWith("/slideshow/")) {
-    const nodeId = p.slice(11).replace(/\/$/, "");
-    if (nodeId) return { screen: "slideshow", nodeId };
-  }
+  if (p.startsWith("/share/"))    { const token  = p.slice(7).replace(/\/$/, "");  if (token)  return { screen: "share",        token  }; }
+  if (p.startsWith("/slideshow/")){ const nodeId = p.slice(11).replace(/\/$/, ""); if (nodeId) return { screen: "slideshow",    nodeId }; }
   if (p.startsWith("/m/")) {
     const rest = p.slice(3).replace(/\/$/, "");
-    if (rest.endsWith("/share")) {
-      const mapId = rest.slice(0, -6);
-      if (mapId) return { screen: "share-manage", mapId };
-    }
-    if (rest) return { screen: "edit", mapId: rest };
+    if (rest.endsWith("/share"))  { const mapId = rest.slice(0, -6); if (mapId) return { screen: "share-manage", mapId }; }
+    if (rest)                       return { screen: "edit", mapId: rest };
   }
   if (p === "/import-history") return { screen: "import-history" };
   if (p === "/import")         return { screen: "import" };
   if (p === "/templates")      return { screen: "templates" };
   if (p === "/minutes")        return { screen: "minutes" };
-
   return { screen: "home" };
 }
 
@@ -50,73 +39,17 @@ export default function App() {
     };
   }, []);
 
-  // 共有・スライドショーは AuthGuard の外（ただしSlideShowは内部でuidをチェック）
   if (route.screen === "share") return <ShareView token={route.token} />;
 
   return (
     <AuthGuard appId="mm">
-      {route.screen === "slideshow"      ? <Slideshow   /> :
-       route.screen === "share-manage"   ? <ShareManage   mapId={route.mapId} /> :
-       route.screen === "edit"           ? <Edit          mapId={route.mapId} /> :
-       route.screen === "import"         ? <ImportScreen  /> :
-       route.screen === "import-history" ? <ImportHistory /> :
-       route.screen === "templates"      ? <TemplateList  /> :
-       route.screen === "minutes"        ? <Minutes       /> :
-       <Home />}
-    </AuthGuard>
-  );
-}
-
-function parsePath() {
-  const p = window.location.pathname;
-
-  if (p.startsWith("/share/")) {
-    const token = p.slice(7).replace(/\/$/, "");
-    if (token) return { screen: "share", token };
-  }
-  if (p.startsWith("/slideshow/")) {
-    const nodeId = p.slice(11).replace(/\/$/, "");
-    if (nodeId) return { screen: "slideshow", nodeId };
-  }
-  if (p.startsWith("/m/")) {
-    const rest = p.slice(3).replace(/\/$/, "");
-    if (rest.endsWith("/share")) {
-      const mapId = rest.slice(0, -6);
-      if (mapId) return { screen: "share-manage", mapId };
-    }
-    if (rest) return { screen: "edit", mapId: rest };
-  }
-  if (p === "/import-history") return { screen: "import-history" };
-  if (p === "/import")         return { screen: "import" };
-  if (p === "/templates")      return { screen: "templates" };
-
-  return { screen: "home" };
-}
-
-export default function App() {
-  const [route, setRoute] = useState(parsePath);
-
-  useEffect(() => {
-    function handleRoute() { setRoute(parsePath()); }
-    window.addEventListener("navigate", handleRoute);
-    window.addEventListener("popstate", handleRoute);
-    return () => {
-      window.removeEventListener("navigate", handleRoute);
-      window.removeEventListener("popstate", handleRoute);
-    };
-  }, []);
-
-  // 共有・スライドショーは AuthGuard の外（ただしSlideShowは内部でuidをチェック）
-  if (route.screen === "share") return <ShareView token={route.token} />;
-
-  return (
-    <AuthGuard appId="mm">
-      {route.screen === "slideshow"      ? <Slideshow   /> :
-       route.screen === "share-manage"   ? <ShareManage   mapId={route.mapId} /> :
-       route.screen === "edit"           ? <Edit          mapId={route.mapId} /> :
-       route.screen === "import"         ? <ImportScreen  /> :
-       route.screen === "import-history" ? <ImportHistory /> :
-       route.screen === "templates"      ? <TemplateList  /> :
+      {route.screen === "slideshow"      ? <Slideshow                    /> :
+       route.screen === "share-manage"   ? <ShareManage mapId={route.mapId} /> :
+       route.screen === "edit"           ? <Edit        mapId={route.mapId} /> :
+       route.screen === "import"         ? <ImportScreen                 /> :
+       route.screen === "import-history" ? <ImportHistory                /> :
+       route.screen === "templates"      ? <TemplateList                 /> :
+       route.screen === "minutes"        ? <Minutes                      /> :
        <Home />}
     </AuthGuard>
   );
