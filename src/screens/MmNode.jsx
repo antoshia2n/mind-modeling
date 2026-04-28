@@ -69,6 +69,10 @@ export default function MmNode({ data, selected }) {
     if (t !== (data.label ?? "")) data.onContentChange?.(t);
   }
   function handleKeyDown(e) {
+    // IME変換中（日本語変換確定）のEnterは無視する
+    // これにより: 1回目Enter=変換完了, 2回目Enter=テキスト確定, 3回目Enter=兄弟追加
+    if (e.isComposing || e.keyCode === 229) return;
+
     if (e.key === "Enter" && !e.shiftKey) {
       // 1回目のEnter → テキスト確定（選択状態に戻る）
       // 2回目のEnter → MapMode側が兄弟ノード追加として処理
